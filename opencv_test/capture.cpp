@@ -2,13 +2,15 @@
 #include <stdlib.h>
 #include <iostream>
 
-#include <opencv2/core/core.hpp>
-#include <opencv2/core/base.hpp>
-#include <opencv2/core/types.hpp>
+#include <opencv2/opencv.hpp>
 
-#include <opencv2/imgproc.hpp>
+// #include <opencv2/core/core.hpp>
+// #include <opencv2/core/base.hpp>
+// #include <opencv2/core/types.hpp>
 
-#include <opencv2/highgui/highgui.hpp>
+// #include <opencv2/imgproc.hpp>
+
+// #include <opencv2/highgui/highgui.hpp>
 
 using namespace cv;
 using namespace std;
@@ -42,9 +44,7 @@ int main()
       Mat frame, frame_final;
       
       // read in a frame
-      cap.read(frame); 
-
-      if(!frame){
+      if(!cap.read(frame)){
         cout << "no frame detected, ending program" << endl;
         break;
       }
