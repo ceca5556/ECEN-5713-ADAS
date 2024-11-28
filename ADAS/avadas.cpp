@@ -487,9 +487,9 @@ int main( int argc, char** argv )
     
 ///////////////////////////////// begin frame processing /////////////////////////////////    
     
-    cpu_set_t cpuset;
-    int core_id;
-    int max_prio, rc;
+    // cpu_set_t cpuset;
+    // int core_id;
+    // int max_prio, rc;
     
     struct timespec start,start_frame, end_frame;
     
@@ -531,25 +531,25 @@ int main( int argc, char** argv )
       
       //////////////////////////// thread stuff for lane detection /////////////////////////////////
       //cpu_set_t cpuset;
-      CPU_ZERO(&cpuset);
+      // CPU_ZERO(&cpuset);
       
-       //core_id = i%numberOfProcessors;
-      core_id = LANE_DETECT+1;
+      //  //core_id = i%numberOfProcessors;
+      // core_id = LANE_DETECT+1;
       
-      CPU_SET(core_id,&cpuset);
+      // CPU_SET(core_id,&cpuset);
       
-      pthread_attr_init(&sched_attr);
-      pthread_attr_setinheritsched(&sched_attr, PTHREAD_EXPLICIT_SCHED);
-      pthread_attr_setschedpolicy(&sched_attr, SCHED_POLICY);
-      pthread_attr_setaffinity_np(&sched_attr, sizeof(cpu_set_t), &cpuset);
+      // pthread_attr_init(&sched_attr);
+      // pthread_attr_setinheritsched(&sched_attr, PTHREAD_EXPLICIT_SCHED);
+      // pthread_attr_setschedpolicy(&sched_attr, SCHED_POLICY);
+      // pthread_attr_setaffinity_np(&sched_attr, sizeof(cpu_set_t), &cpuset);
       
-      max_prio=sched_get_priority_max(SCHED_POLICY);
-      sched_param.sched_priority=max_prio;
+      // max_prio=sched_get_priority_max(SCHED_POLICY);
+      // sched_param.sched_priority=max_prio;
       
-      if((rc=sched_setscheduler(getpid(), SCHED_POLICY, &sched_param)) < 0)
-        perror("sched_setscheduler");
+      // if((rc=sched_setscheduler(getpid(), SCHED_POLICY, &sched_param)) < 0)
+      //   perror("sched_setscheduler");
       
-      pthread_attr_setschedparam(&sched_attr, &sched_param);
+      // pthread_attr_setschedparam(&sched_attr, &sched_param);
       
       threadParams[LANE_DETECT].threadIdx = LANE_DETECT;
       
@@ -562,7 +562,7 @@ int main( int argc, char** argv )
       threadParams[LANE_DETECT].disp = disp;
       
       pthread_create(&threads[LANE_DETECT],   // pointer to thread descriptor
-                     &sched_attr,     // use default attributes
+                     NULL,     // use default attributes
                      lane_detect, // thread function entry point
                      (void *)&(threadParams[LANE_DETECT]) // parameters to pass in
                     );
@@ -577,23 +577,23 @@ int main( int argc, char** argv )
 
       /////////////////////////// thread stuff for stop detection /////////////////////////////////  
  
-      core_id = STOP_DETECT+1;
+      // core_id = STOP_DETECT+1;
       
-      CPU_SET(core_id,&cpuset);
+      // CPU_SET(core_id,&cpuset);
       
-      pthread_attr_init(&sched_attr);
-      pthread_attr_setinheritsched(&sched_attr, PTHREAD_EXPLICIT_SCHED);
-      pthread_attr_setschedpolicy(&sched_attr, SCHED_POLICY);
-      pthread_attr_setaffinity_np(&sched_attr, sizeof(cpu_set_t), &cpuset);
+      // pthread_attr_init(&sched_attr);
+      // pthread_attr_setinheritsched(&sched_attr, PTHREAD_EXPLICIT_SCHED);
+      // pthread_attr_setschedpolicy(&sched_attr, SCHED_POLICY);
+      // pthread_attr_setaffinity_np(&sched_attr, sizeof(cpu_set_t), &cpuset);
       
-      max_prio=sched_get_priority_max(SCHED_POLICY);
-      sched_param.sched_priority=max_prio;
+      // max_prio=sched_get_priority_max(SCHED_POLICY);
+      // sched_param.sched_priority=max_prio;
       
-      if((rc=sched_setscheduler(getpid(), SCHED_POLICY, &sched_param)) < 0)
-        perror("sched_setscheduler"); 
+      // if((rc=sched_setscheduler(getpid(), SCHED_POLICY, &sched_param)) < 0)
+      //   perror("sched_setscheduler"); 
         
         
-      pthread_attr_setschedparam(&sched_attr, &sched_param);
+      // pthread_attr_setschedparam(&sched_attr, &sched_param);
       
       threadParams[STOP_DETECT].threadIdx = STOP_DETECT;
       
@@ -609,7 +609,7 @@ int main( int argc, char** argv )
       threadParams[STOP_DETECT].hog = hog;
       
       pthread_create(&threads[STOP_DETECT],   // pointer to thread descriptor
-                     &sched_attr,     // use default attributes
+                     NULL,     // use default attributes
                      stop_detect, // thread function entry point
                      (void *)&(threadParams[STOP_DETECT]) // parameters to pass in
                     );
