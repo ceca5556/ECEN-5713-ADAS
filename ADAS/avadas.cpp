@@ -10,6 +10,10 @@
 #include "opencv2/objdetect.hpp"
 #include <opencv2/videoio.hpp> // Video write
 
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -39,32 +43,69 @@ using namespace cv; using namespace std;
 #define MINUTE   (60)
 
 
+typedef struct frameParams_s
+{
+
+  pthread_t thread_ID;
+  int frameIdx;
+  Mat frame;
+  Mat frame_gray;
+
+  Rect lane_roi;
+
+  Rect stop_roi;
+  int focal;
+  bool hog;
+  
+  Size in_size;
+
+  bool disp;
+
+} frameParams_t;
+
 typedef struct
 {
 
-    int threadIdx;
-    //VideoCapture input;
-    Mat frame;
-    
-    Vec4i left_lane;
-    Vec4i right_lane;
-    Rect lane_roi;
+  // pthread_t thread_ID;
+  // int frameIdx;
+  // Mat orig_frame;
 
-    //CascadeClassifier stop_cascade;
-    vector<Rect> stop_signs;
-    Rect stop_roi;
-    int focal;
-    bool hog;
-    
-    Size in_size;
+  //VideoCapture input;
+  Mat lane_frame;
+  Vec4i left_lane;
+  Vec4i right_lane;
+  Rect lane_roi;
+  
+  
+  Size in_size;
 
-    bool disp;
-    
+  bool disp;
+  
 //    float time;
-    //Mat image;
-    //Mat new_image;
-    //int channel;
-} threadParams_t;
+  //Mat image;
+  //Mat new_image;
+  //int channel;
+} laneParams_t;
+
+typedef struct
+{
+
+  //CascadeClassifier stop_cascade;
+  Mat stop_frame;
+  vector<Rect> stop_signs;
+  Rect stop_roi;
+  int focal;
+  bool hog;
+  
+  Size in_size;
+
+  bool disp;
+  
+//    float time;
+  //Mat image;
+  //Mat new_image;
+  //int channel;
+} stopParams_t;
 
 int lowThreshold = 17;
 const int max_lowThreshold = 200;
@@ -75,15 +116,18 @@ const int kernel_size = 3;
 int numberOfProcessors = NUM_CPUS;
 
 
-pthread_t threads[NUM_FEAT];
+// pthread_t threads[NUM_FEAT];
 //threadParams_lane_t laneParams;
-threadParams_t threadParams[NUM_FEAT];
+// threadParams_t threadParams[NUM_FEAT];
+// frameParams_t threadParams;
 pthread_attr_t sched_attr;
 struct sched_param sched_param;
 
-Mat orig_frame;
+// Mat orig_frame;
 char winInput;
 
+bool DISP_LINES = true;
+bool DISP_STOP = true;
 
 
 const string final_out = "output";
@@ -225,7 +269,7 @@ int stop_dist(Rect rectangle, float f){
 */
 void *stop_detect(void *threadp){
 
-    threadParams_t *threadParams = (threadParams_t *)threadp;
+    stopParams_t *threadParams = (stopParams_t *)threadp;
     vector<Rect> stop_signs;
     float dist;
     
@@ -233,13 +277,13 @@ void *stop_detect(void *threadp){
     //   namedWindow("original",WINDOW_NORMAL);
        namedWindow("stop_roi",WINDOW_NORMAL);
        
-       imshow("stop_roi",threadParams->frame);
+       imshow("stop_roi",threadParams->stop_frame);
     }
      
     if( threadParams->hog)
-      stop_hog.detectMultiScale(threadParams->frame, threadParams->stop_signs);
+      stop_hog.detectMultiScale(threadParams->stop_frame, threadParams->stop_signs);
     else
-      stop_cascade.detectMultiScale(threadParams->frame, threadParams->stop_signs);
+      stop_cascade.detectMultiScale(threadParams->stop_frame, threadParams->stop_signs);
     
     int detected_num = threadParams->stop_signs.size();
     //int thrds = 12;
@@ -290,21 +334,21 @@ void lane_check(Vec4i left_lane, Vec4i right_lane){
 */
 void *lane_detect(void *threadp){
 
-    threadParams_t *threadParams = (threadParams_t *)threadp;
+    laneParams_t *threadParams = (laneParams_t *)threadp;
     
     if(threadParams->disp){
     //   namedWindow("original",WINDOW_NORMAL);
        namedWindow("lane_roi",WINDOW_NORMAL);
        //namedWindow("canny",WINDOW_NORMAL);
        
-       imshow("lane_roi",threadParams->frame);
+       imshow("lane_roi",threadParams->lane_frame);
      }
     
     Mat canny_frame;//, roi_frame;
     vector<Vec4i> lines;
     
     //roi_frame = threadParams->frame(
-    canny_edge(&threadParams->frame,&canny_frame,threadParams->disp);//,50,200,3);
+    canny_edge(&threadParams->lane_frame,&canny_frame,threadParams->disp);//,50,200,3);
     HoughLinesP(canny_frame, lines, 1, CV_PI/180, 50, 50, 10 );
     
     
@@ -359,7 +403,82 @@ void *lane_detect(void *threadp){
 
 }
 
+void *frame_proc_thread(void *frame_thread_params){
 
+
+
+  frameParams_t *frameParams = (frameParams_t *)frame_thread_params;
+
+
+  stopParams_t stopParams;
+  laneParams_t laneParams;
+
+
+  
+  
+  laneParams.lane_frame = frameParams->frame_gray(frameParams->lane_roi);    
+  laneParams.lane_roi = frameParams->lane_roi;  
+  laneParams.in_size = frameParams->in_size;
+  laneParams.disp = frameParams->disp;
+
+
+  stopParams.stop_frame = frameParams->frame_gray(frameParams->stop_roi);
+  stopParams.stop_roi = frameParams->stop_roi;  
+  stopParams.in_size = frameParams->in_size;
+  stopParams.focal = frameParams->focal;
+  stopParams.hog = frameParams->hog;
+  stopParams.disp = frameParams->disp; 
+
+  pthread_t threads[NUM_FEAT];
+
+  pthread_create(&threads[LANE_DETECT],   // pointer to thread descriptor
+                 NULL,     // use default attributes
+                 lane_detect, // thread function entry point
+                 (void *)&(laneParams) // parameters to pass in
+                );
+
+  pthread_create(&threads[STOP_DETECT],   // pointer to thread descriptor
+                 NULL,     // use default attributes
+                 stop_detect, // thread function entry point
+                 (void *)&(stopParams) // parameters to pass in
+                );
+
+  for(int k=0;k<NUM_FEAT;k++)
+         pthread_join(threads[k], NULL);
+
+        //  cout << "detection complete" << endl;
+
+  
+  // lanes
+  Vec4i left_lane, right_lane;
+  
+  //if(threadParams[LANE_DETECT].left_lane == 0);
+  //  cout << "left empty" << endl;
+  left_lane = laneParams.left_lane;
+  
+  //if(threadParams[LANE_DETECT].right_lane == 0);
+  //  cout << "right empty" << endl;
+  right_lane = laneParams.right_lane;
+  
+  if(DISP_LINES){
+    
+  
+    line( frameParams->frame, Point(left_lane[0], left_lane[1]), Point(left_lane[2], left_lane[3]), Scalar(0,0,255), 3, LINE_AA);
+    line( frameParams->frame, Point(right_lane[0], right_lane[1]), Point(right_lane[2], right_lane[3]), Scalar(0,0,255), 3, LINE_AA);
+  }
+  
+  // stop signs
+  // int dist;
+  //cout << threadParams[STOP_DETECT].stop_signs.size() << endl;
+  if(DISP_STOP){
+    for(uint16_t k = 0; k<stopParams.stop_signs.size();k++){
+        rectangle(frameParams->frame, stopParams.stop_signs[k], Scalar(49,49,255), 5);
+    }
+  }
+
+  return NULL;
+
+}
 
 
 static const string keys =  "{ help h | | print help message }"
@@ -478,8 +597,8 @@ int main( int argc, char** argv )
                  
     
     // DISPLAY TOGGLES
-    bool DISP_LINES = false;
-    bool DISP_STOP = false;
+    // bool DISP_LINES = false;
+    // bool DISP_STOP = false;
     
     //int TPR = 0;
     //int FPR = 0;
@@ -501,208 +620,169 @@ int main( int argc, char** argv )
     // start time for frame
     clock_gettime(CLOCK_REALTIME, &start_frame);
 
-    while(1){
-    //for(int i=0; i<NUM_FEAT; i++)
-    //{
-    
-    
-       // read in frame
-      if(!input.read(frame)){
-        cout << "no more frames, video over press any key to continue" << endl;
-        //while(1){
-        //  if((winInput = waitKey(0)) == ESCAPE_KEY){ 
-        //    break;
-        //  }
-        //}
-        waitKey(0);
-        break;
-      } 
-      
-      if(disp)
-        imshow("original", frame);
-      
-      // grayscale and blur
-      cvtColor( frame, frame_gray, COLOR_BGR2GRAY );
-      GaussianBlur(frame_gray, frame_gray, Size(9,9), 2, 2);
-
-      if(disp)
-        imshow("grayscale", frame_gray );
-      
-      
-      //////////////////////////// thread stuff for lane detection /////////////////////////////////
-      //cpu_set_t cpuset;
-      // CPU_ZERO(&cpuset);
-      
-      //  //core_id = i%numberOfProcessors;
-      // core_id = LANE_DETECT+1;
-      
-      // CPU_SET(core_id,&cpuset);
-      
-      // pthread_attr_init(&sched_attr);
-      // pthread_attr_setinheritsched(&sched_attr, PTHREAD_EXPLICIT_SCHED);
-      // pthread_attr_setschedpolicy(&sched_attr, SCHED_POLICY);
-      // pthread_attr_setaffinity_np(&sched_attr, sizeof(cpu_set_t), &cpuset);
-      
-      // max_prio=sched_get_priority_max(SCHED_POLICY);
-      // sched_param.sched_priority=max_prio;
-      
-      // if((rc=sched_setscheduler(getpid(), SCHED_POLICY, &sched_param)) < 0)
-      //   perror("sched_setscheduler");
-      
-      // pthread_attr_setschedparam(&sched_attr, &sched_param);
-      
-      threadParams[LANE_DETECT].threadIdx = LANE_DETECT;
-      
-      threadParams[LANE_DETECT].frame = frame_gray(lane_roi);
-      
-      threadParams[LANE_DETECT].lane_roi = lane_roi;
-      
-      threadParams[LANE_DETECT].in_size = in_size;
-      
-      threadParams[LANE_DETECT].disp = disp;
-      
-      pthread_create(&threads[LANE_DETECT],   // pointer to thread descriptor
-                     NULL,     // use default attributes
-                     lane_detect, // thread function entry point
-                     (void *)&(threadParams[LANE_DETECT]) // parameters to pass in
-                    );
-                    
-      //pthread_create(&threads[LANE_DETECT],   // pointer to thread descriptor
-      //               &sched_attr,     // use default attributes
-      //               lane_detect, // thread function entry point
-      //               (void *)&(laneParams) // parameters to pass in
-      //             );
-      //pthread_join(threads[0], NULL);
-
-
-      /////////////////////////// thread stuff for stop detection /////////////////////////////////  
- 
-      // core_id = STOP_DETECT+1;
-      
-      // CPU_SET(core_id,&cpuset);
-      
-      // pthread_attr_init(&sched_attr);
-      // pthread_attr_setinheritsched(&sched_attr, PTHREAD_EXPLICIT_SCHED);
-      // pthread_attr_setschedpolicy(&sched_attr, SCHED_POLICY);
-      // pthread_attr_setaffinity_np(&sched_attr, sizeof(cpu_set_t), &cpuset);
-      
-      // max_prio=sched_get_priority_max(SCHED_POLICY);
-      // sched_param.sched_priority=max_prio;
-      
-      // if((rc=sched_setscheduler(getpid(), SCHED_POLICY, &sched_param)) < 0)
-      //   perror("sched_setscheduler"); 
-        
-        
-      // pthread_attr_setschedparam(&sched_attr, &sched_param);
-      
-      threadParams[STOP_DETECT].threadIdx = STOP_DETECT;
-      
-      threadParams[STOP_DETECT].frame = frame_gray(stop_roi);
-      
-      threadParams[STOP_DETECT].stop_roi = stop_roi;
-      
-      //threadParams[STOP_DETECT].in_size = in_size;
-      
-      threadParams[STOP_DETECT].focal = focal;
-      
-      threadParams[STOP_DETECT].disp = disp;
-      threadParams[STOP_DETECT].hog = hog;
-      
-      pthread_create(&threads[STOP_DETECT],   // pointer to thread descriptor
-                     NULL,     // use default attributes
-                     stop_detect, // thread function entry point
-                     (void *)&(threadParams[STOP_DETECT]) // parameters to pass in
-                    );
- 
- 
-      ///////////////////////////////////////////////////////////////////////////////////////////////    
-
-      // join and wait for all threads to finish
-      for(int k=0;k<NUM_FEAT;k++)
-         pthread_join(threads[k], NULL);
-
-
-      ///////////////////////////// display results from detection ///////////////////////////////// 
-
-      // lanes
-      Vec4i left_lane, right_lane;
-      
-      //if(threadParams[LANE_DETECT].left_lane == 0);
-      //  cout << "left empty" << endl;
-      left_lane = threadParams[LANE_DETECT].left_lane;
-      
-      //if(threadParams[LANE_DETECT].right_lane == 0);
-      //  cout << "right empty" << endl;
-      right_lane = threadParams[LANE_DETECT].right_lane;
-      
-      if(DISP_LINES){
-        
-      
-        line( frame, Point(left_lane[0], left_lane[1]), Point(left_lane[2], left_lane[3]), Scalar(0,0,255), 3, LINE_AA);
-        line( frame, Point(right_lane[0], right_lane[1]), Point(right_lane[2], right_lane[3]), Scalar(0,0,255), 3, LINE_AA);
-      }
-      
-      // stop signs
-      // int dist;
-      //cout << threadParams[STOP_DETECT].stop_signs.size() << endl;
-      if(DISP_STOP){
-        for(uint16_t k = 0; k<threadParams[STOP_DETECT].stop_signs.size();k++){
-            rectangle(frame, threadParams[STOP_DETECT].stop_signs[k], Scalar(49,49,255), 5);
-        }
-      }
-      // frame display
-      imshow(final_out,frame);
-      
-      frame_cnt++;
-      
-      // end time of current frame
-      clock_gettime(CLOCK_REALTIME, &end_frame);
-      
-      frame_time_calc(&start,&start_frame,&end_frame,&frame_cnt);
-      
-      //if(threadParams[STOP_DETECT].stop_signs.size()){
-        
-      //  winInput = waitKey(0);
-        
-      //  if (winInput == 'y' ){
-      //    TPR++;
-      //  }
-      //  else if(winInput == 'n' ){
-      //    FPR++;
+  while(1){
+  //for(int i=0; i<NUM_FEAT; i++)
+  //{
+  
+  
+      // read in frame
+    if(!input.read(frame)){
+      cout << "no more frames, video over press any key to continue" << endl;
+      //while(1){
+      //  if((winInput = waitKey(0)) == ESCAPE_KEY){ 
+      //    break;
       //  }
       //}
-      
-      // write to output file
-      if(OUT_WRITE){
-        output_vid.write(frame);
-      }
-      
-      
-      //////////////////////////////////////////////////////////////////////////////////////////////  
+      waitKey(0);
+      break;
+    } 
+    
+    if(disp)
+      imshow("original", frame);
+    
+    // grayscale and blur
+    cvtColor( frame, frame_gray, COLOR_BGR2GRAY );
+    GaussianBlur(frame_gray, frame_gray, Size(9,9), 2, 2);
 
-      if ((winInput = waitKey(1)) == ESCAPE_KEY)
-      //if ((winInput = waitKey(0)) == ESCAPE_KEY)
-      {
-          break;
-      }
-      else if(winInput == 'L' || winInput == 'l'){
-        DISP_LINES ^= 1;
-        cout << "lines toggled: " << DISP_LINES << endl;
-      }
-      else if(winInput == 'S' || winInput == 's'){
-        DISP_STOP ^= 1;
-        cout << "stop signs toggled: " << DISP_STOP << endl;
-      }
-      else if(winInput == 32){
-        cout << "video stopped, press any key to resume" << endl;
-        waitKey();
-      }
+    if(disp)
+      imshow("grayscale", frame_gray );
+    
+    
+    //////////////////////////// thread stuff for lane detection /////////////////////////////////    
+    // cout << sizeof(frameParams_t) << endl;
+    // frameParams_t *frameParams = (frameParams_t*)malloc(sizeof(frameParams_t));
+    frameParams_t *frameParams = new frameParams_t;
+    // threadParams->frameIdx = LANE_DETECT;
+
+    if(frameParams == NULL){
+      cout << "unable to malloc memory for frame params" << endl;
+      exit(SYSTEM_ERROR);
+    }
+
+    // cout << "setting frame params" << endl;
+
+    frameParams->frame = frame.clone();
+    frameParams->frame_gray = frame_gray.clone();
+    
+    // threadParams.lane_frame = frame_gray(lane_roi);
+    
+    frameParams->lane_roi = lane_roi;
+    
+    frameParams->in_size = in_size;
+
+
+    /////////////////////////// thread stuff for stop detection /////////////////////////////////  
+    
+    // threadParams.stop_frame = frame_gray(stop_roi);
+    
+    frameParams->stop_roi = stop_roi;
+    
+    //threadParams[STOP_DETECT].in_size = in_size;
+    
+    frameParams->focal = focal;
+    
+    frameParams->disp = disp;
+    frameParams->hog = hog;
+    
+    // cout << "thread params set" << endl;
+
+    pthread_create(&frameParams->thread_ID,   // pointer to thread descriptor
+                   NULL,     // use default attributes
+                   frame_proc_thread, // thread function entry point
+                   (void *)(frameParams) // parameters to pass in
+                  );
+
+
+    ///////////////////////////////////////////////////////////////////////////////////////////////    
+
+    // join and wait for all threads to finish
+    // for(int k=0;k<NUM_FEAT;k++)
+    //     pthread_join(threads[k], NULL);
+    pthread_join(frameParams->thread_ID, NULL);
+
+    ///////////////////////////// display results from detection ///////////////////////////////// 
+
+    // // lanes
+    // Vec4i left_lane, right_lane;
+    
+    // //if(threadParams[LANE_DETECT].left_lane == 0);
+    // //  cout << "left empty" << endl;
+    // left_lane = threadParams[LANE_DETECT].left_lane;
+    
+    // //if(threadParams[LANE_DETECT].right_lane == 0);
+    // //  cout << "right empty" << endl;
+    // right_lane = threadParams[LANE_DETECT].right_lane;
+    
+    // if(DISP_LINES){
+      
+    
+    //   line( frame, Point(left_lane[0], left_lane[1]), Point(left_lane[2], left_lane[3]), Scalar(0,0,255), 3, LINE_AA);
+    //   line( frame, Point(right_lane[0], right_lane[1]), Point(right_lane[2], right_lane[3]), Scalar(0,0,255), 3, LINE_AA);
+    // }
+    
+    // // stop signs
+    // // int dist;
+    // //cout << threadParams[STOP_DETECT].stop_signs.size() << endl;
+    // if(DISP_STOP){
+    //   for(uint16_t k = 0; k<threadParams[STOP_DETECT].stop_signs.size();k++){
+    //       rectangle(frame, threadParams[STOP_DETECT].stop_signs[k], Scalar(49,49,255), 5);
+    //   }
+    // }
+    // frame display
+    imshow(final_out,frameParams->frame);
+
+    delete frameParams;
+    
+    frame_cnt++;
+    
+    // end time of current frame
+    clock_gettime(CLOCK_REALTIME, &end_frame);
+    
+    frame_time_calc(&start,&start_frame,&end_frame,&frame_cnt);
+    
+    //if(threadParams[STOP_DETECT].stop_signs.size()){
+      
+    //  winInput = waitKey(0);
+      
+    //  if (winInput == 'y' ){
+    //    TPR++;
+    //  }
+    //  else if(winInput == 'n' ){
+    //    FPR++;
+    //  }
+    //}
+    
+    // write to output file
+    if(OUT_WRITE){
+      output_vid.write(frame);
     }
     
-
     
-    //cout << "true positive: " << TPR << endl;
-    //cout << "false positive: " << FPR << endl;
-    //cout << "total detects: " << (TPR + FPR) << endl;
+    //////////////////////////////////////////////////////////////////////////////////////////////  
+
+    if ((winInput = waitKey(1)) == ESCAPE_KEY)
+    //if ((winInput = waitKey(0)) == ESCAPE_KEY)
+    {
+        break;
+    }
+    else if(winInput == 'L' || winInput == 'l'){
+      DISP_LINES ^= 1;
+      cout << "lines toggled: " << (DISP_LINES ? "on" : "off") << endl;
+    }
+    else if(winInput == 'S' || winInput == 's'){
+      DISP_STOP ^= 1;
+      cout << "stop signs toggled: " << (DISP_STOP ? "on" : "off") << endl;
+    }
+    else if(winInput == 32){
+      cout << "video stopped, press any key to resume" << endl;
+      waitKey();
+    }
+  }
+    
+
+  
+  //cout << "true positive: " << TPR << endl;
+  //cout << "false positive: " << FPR << endl;
+  //cout << "total detects: " << (TPR + FPR) << endl;
     return 0;
 }
