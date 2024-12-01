@@ -151,6 +151,9 @@ static int fps_sum = 0;
 static int call_count = 0;
 static float sensor_width = 4.55; // milimeters
 
+Mat global_frame;
+bool global_check = false;
+
 
 /**************************************************************
 *
@@ -475,6 +478,12 @@ void *frame_proc_thread(void *frame_thread_params){
         rectangle(frameParams->frame, stopParams.stop_signs[k], Scalar(49,49,255), 5);
     }
   }
+
+  resize(frameParams->frame,frameParams->frame,Size(320,240));
+
+  // global_frame = frameParams->frame.clone();
+
+  // global_check = true;
 
   return NULL;
 
