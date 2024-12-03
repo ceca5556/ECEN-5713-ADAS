@@ -66,11 +66,6 @@ typedef struct frameParams_s
 typedef struct
 {
 
-  // pthread_t thread_ID;
-  // int frameIdx;
-  // Mat orig_frame;
-
-  //VideoCapture input;
   Mat lane_frame;
   Vec4i left_lane;
   Vec4i right_lane;
@@ -81,10 +76,6 @@ typedef struct
 
   bool disp;
   
-//    float time;
-  //Mat image;
-  //Mat new_image;
-  //int channel;
 } laneParams_t;
 
 typedef struct
@@ -101,10 +92,6 @@ typedef struct
 
   bool disp;
   
-//    float time;
-  //Mat image;
-  //Mat new_image;
-  //int channel;
 } stopParams_t;
 
 int lowThreshold = 17;
@@ -147,12 +134,15 @@ int stop_roi_bottom_offset = 50;
 int stop_roi_left_offset = 50;
 int stop_roi_right_offset = 0;
 
-static int fps_sum = 0;
-static int call_count = 0;
+// static int fps_sum = 0;
+// static int call_count = 0;
+// static int frame_num = 0;
 static float sensor_width = 4.55; // milimeters
 
-Mat global_frame;
-bool global_check = false;
+// Mat global_frame;
+// bool global_check = false;
+
+pthread_mutex_t time_mutex;
 
 
 /**************************************************************
@@ -178,18 +168,41 @@ bool global_check = false;
 *
 *
 ***************************************************************/
-static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop,int *frame_num){
+// static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop,int *frame_num){
+static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop){
   
+  static int fps_sum;
+  static int call_count;
+  static int frame_num;
+
+  int rc= 0;
   int full_time = stop->tv_sec - start->tv_sec;
   int frme_time = stop->tv_sec - start_frame->tv_sec;
   
-  
-  
+  /* this function will need mutex:
+        - variables affected:
+            - frame_num
+            - call_count
+            - fps_sum
+        
+        - better to have mutex encompass all or just the parts that use above variable?
+  */
+
+  rc = pthread_mutex_lock(&time_mutex);
+  if(rc != 0){
+      syslog(LOG_ERR,"ERRROR fps calculation: mutex lock function failed: %s",strerror(rc));
+      // cleanup(false,0,0,local_w_file_fd);
+      // raise(SIGINT);
+      exit(SYSTEM_ERROR);
+  }
+
+  frame_num++;
+
   if(frme_time >= SECOND){
-    syslog(LOG_NOTICE, "FPS: %d frames in %d second", *frame_num, frme_time);
-    fps_sum += *frame_num;
+    syslog(LOG_NOTICE, "FPS: %d frames in %d second", frame_num, frme_time);
+    fps_sum += frame_num;
     call_count++;
-    *frame_num = 0;
+    frame_num = 0;
     clock_gettime(CLOCK_REALTIME, start_frame);
   }
   
@@ -200,6 +213,14 @@ static void frame_time_calc(struct timespec *start,struct timespec *start_frame,
     fps_sum = 0;
     call_count = 0;
     clock_gettime(CLOCK_REALTIME, start);
+  }
+
+  rc = pthread_mutex_unlock(&time_mutex);
+  if(rc != 0){
+      syslog(LOG_ERR,"ERRROR fps calculation: mutex unlock function failed: %s",strerror(rc));
+      // cleanup(false,0,0,local_w_file_fd);
+      // raise(SIGINT);
+      exit(SYSTEM_ERROR);
   }
 
 }
@@ -506,128 +527,138 @@ static const string keys =  "{ help h | | print help message }"
 int main( int argc, char** argv )
 {
     
-    VideoCapture input;
-    VideoWriter  output_vid;
-    //VideoCapture cap;
-    //int frame_tot = 0; 
-    int frame_cnt = 0;
-    bool OUT_WRITE = 0;
-    //CascadeClassifier stop_cascade;
-    //Size in_size;
-    //mode = false;
-    // check for cam or video input
-    CommandLineParser parser(argc, argv, keys);
-    if (parser.has("help"))
-    {
-      parser.printMessage();
-      return 0;
-    }
-    
-    int camera = parser.get<int>("camera");
-    string file = parser.get<string>("video");
-    bool disp = parser.get<bool>("display");
-    string xml = parser.get<string>("xml");
-    bool hog = parser.get<bool>("hog");
-    float focal = parser.get<float>("focal");
-    string out_file = parser.get<string>("store");
-    
-    
-    if (!parser.check())
-    {
-      parser.printErrors();
-      return 1;
-    }
-    
-    // check video file or cam
-    if (file.empty())
-    {
-      input.open(camera);
-      //cap.set(CAP_PROP_FRAME_WIDTH, WIDTH);
-      //cap.set(CAP_PROP_FRAME_HEIGHT, HEIGHT);
-    }
-    else
-    {
-      file = samples::findFileOrKeep(file);
-      input.open(file);
-    
-    }
-    
-    // confirm input can be opened
-    if (!input.isOpened())
-    {
-      cout << "Can not open video stream: '" << (file.empty() ? "<camera>" : file) << "'" << endl;
-      return 2;
-    }
-    
-    // load xml
-    if(hog){
-      if(!stop_hog.load(xml)){
-        cout << "\nERROR: failed to load xml file\n" << endl;
-        exit(SYSTEM_ERROR);
-      }
-    }
-    else{
-      if(!stop_cascade.load(xml)){
-        cout << "\nERROR: failed to load xml file\n" << endl;
-        exit(SYSTEM_ERROR);
-      }
-    }
-    
-    // find height and width of video 
-    in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT));
-    
-    // create output file if input given
-    if(!out_file.empty()){
-      int in_fps = input.get(CAP_PROP_FPS);
-      int fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
-      output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
-      OUT_WRITE = 1;
-    }
-    
-    // create windows
-    if(disp){
-      namedWindow("original",WINDOW_NORMAL);
-      namedWindow("grayscale",WINDOW_NORMAL);
-    }
-    namedWindow(final_out,WINDOW_NORMAL);
+  VideoCapture input;
+  VideoWriter  output_vid;
+  //VideoCapture cap;
+  //int frame_tot = 0; 
+  // int frame_cnt = 0;
+  bool OUT_WRITE = 0;
+  //CascadeClassifier stop_cascade;
+  //Size in_size;
+  //mode = false;
+  int rc = 0;
 
-    Mat frame, frame_gray;
-    
-    // DETECTION ROI
-    Rect lane_roi(0 + lane_roi_width_offset,                  // x starting point
-                 in_size.height/2 + lane_roi_top_offset,      // y start
-                 in_size.width - lane_roi_width_offset,       // width
-                 in_size.height/2 - lane_roi_bottom_offset);  // height
-                 
-    Rect stop_roi(in_size.width/2 + stop_roi_left_offset,         // x starting point
-                 0 + stop_roi_top_offset,                      // y starting point
-                 in_size.width/2 - stop_roi_left_offset,        // width
-                 in_size.height/2 - stop_roi_bottom_offset);   // height
-                 
-    
-    // DISPLAY TOGGLES
-    // bool DISP_LINES = false;
-    // bool DISP_STOP = false;
-    
-    //int TPR = 0;
-    //int FPR = 0;
+  // check for cam or video input
+  CommandLineParser parser(argc, argv, keys);
+  if (parser.has("help"))
+  {
+    parser.printMessage();
+    return 0;
+  }
+  
+  int camera = parser.get<int>("camera");
+  string file = parser.get<string>("video");
+  bool disp = parser.get<bool>("display");
+  string xml = parser.get<string>("xml");
+  bool hog = parser.get<bool>("hog");
+  float focal = parser.get<float>("focal");
+  string out_file = parser.get<string>("store");
+  
+  
+  if (!parser.check())
+  {
+    parser.printErrors();
+    return 1;
+  }
+  
+  // check video file or cam
+  if (file.empty())
+  {
+    input.open(camera);
+    //cap.set(CAP_PROP_FRAME_WIDTH, WIDTH);
+    //cap.set(CAP_PROP_FRAME_HEIGHT, HEIGHT);
+  }
+  else
+  {
+    file = samples::findFileOrKeep(file);
+    input.open(file);
+  
+  }
+  
+  // confirm input can be opened
+  if (!input.isOpened())
+  {
+    cout << "Can not open video stream: '" << (file.empty() ? "<camera>" : file) << "'" << endl;
+    return 2;
+  }
+  
+  // load xml
+  if(hog){
+    if(!stop_hog.load(xml)){
+      cout << "\nERROR: failed to load xml file\n" << endl;
+      exit(SYSTEM_ERROR);
+    }
+  }
+  else{
+    if(!stop_cascade.load(xml)){
+      cout << "\nERROR: failed to load xml file\n" << endl;
+      exit(SYSTEM_ERROR);
+    }
+  }
+  
+  // find height and width of video 
+  in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT));
+  
+  // create output file if input given
+  if(!out_file.empty()){
+    int in_fps = input.get(CAP_PROP_FPS);
+    int fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
+    output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
+    OUT_WRITE = 1;
+  }
+  
+  // create windows
+  if(disp){
+    namedWindow("original",WINDOW_NORMAL);
+    namedWindow("grayscale",WINDOW_NORMAL);
+  }
+  namedWindow(final_out,WINDOW_NORMAL);
 
-    
+  Mat frame, frame_gray;
+  
+  // DETECTION ROI
+  Rect lane_roi(0 + lane_roi_width_offset,                  // x starting point
+                in_size.height/2 + lane_roi_top_offset,      // y start
+                in_size.width - lane_roi_width_offset,       // width
+                in_size.height/2 - lane_roi_bottom_offset);  // height
+                
+  Rect stop_roi(in_size.width/2 + stop_roi_left_offset,         // x starting point
+                0 + stop_roi_top_offset,                      // y starting point
+                in_size.width/2 - stop_roi_left_offset,        // width
+                in_size.height/2 - stop_roi_bottom_offset);   // height
+                
+  
+  // DISPLAY TOGGLES
+  // bool DISP_LINES = false;
+  // bool DISP_STOP = false;
+  
+  //int TPR = 0;
+  //int FPR = 0;
+
+  
 ///////////////////////////////// begin frame processing /////////////////////////////////    
-    
-    // cpu_set_t cpuset;
-    // int core_id;
-    // int max_prio, rc;
-    
-    struct timespec start,start_frame, end_frame;
-    
-    syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
-    
-    // start time for 1 minute comparison
-    clock_gettime(CLOCK_REALTIME, &start);
-    
-    // start time for frame
-    clock_gettime(CLOCK_REALTIME, &start_frame);
+  
+  // cpu_set_t cpuset;
+  // int core_id;
+  // int max_prio, rc;
+  
+  rc = pthread_mutex_init(&time_mutex,NULL);
+  if(rc != 0){
+
+      syslog(LOG_ERR, "ERROR: could not succesfully initialize mutex, error number: %d", rc);
+      return SYSTEM_ERROR;
+
+  }
+
+  struct timespec start,start_frame, end_frame;
+  
+  syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
+  
+  // start time for 1 minute comparison
+  clock_gettime(CLOCK_REALTIME, &start);
+  
+  // start time for frame
+  clock_gettime(CLOCK_REALTIME, &start_frame);
 
   while(1){
   //for(int i=0; i<NUM_FEAT; i++)
@@ -742,12 +773,13 @@ int main( int argc, char** argv )
 
     delete frameParams;
     
-    frame_cnt++;
+    // frame_cnt++;
     
     // end time of current frame
     clock_gettime(CLOCK_REALTIME, &end_frame);
     
-    frame_time_calc(&start,&start_frame,&end_frame,&frame_cnt);
+    // frame_time_calc(&start,&start_frame,&end_frame,&frame_cnt);
+    frame_time_calc(&start,&start_frame,&end_frame);
     
     //if(threadParams[STOP_DETECT].stop_signs.size()){
       
