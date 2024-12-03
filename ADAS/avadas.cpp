@@ -142,6 +142,7 @@ static float sensor_width = 4.55; // milimeters
 // Mat global_frame;
 // bool global_check = false;
 
+struct timespec start_60S,start_1S;
 pthread_mutex_t time_mutex;
 
 
@@ -150,10 +151,10 @@ pthread_mutex_t time_mutex;
 *  @brief dt_sec: calculates the difference between two timespec
 *         structs in seconds
 *
-*  @param[in] start
+*  @param[in] start_60S
 *        - pointer to starting timespec struct (used for 60 sec calculation)
 *
-*  @param[in] start_frame
+*  @param[in] start_1S
 *      - pointer to starting timespec struct of the frame
 *
 *
@@ -169,41 +170,24 @@ pthread_mutex_t time_mutex;
 *
 ***************************************************************/
 // static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop,int *frame_num){
-static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop){
+static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S, struct timespec *stop){
   
   static int fps_sum;
   static int call_count;
   static int frame_num;
 
-  int rc= 0;
-  int full_time = stop->tv_sec - start->tv_sec;
-  int frme_time = stop->tv_sec - start_frame->tv_sec;
-  
-  /* this function will need mutex:
-        - variables affected:
-            - frame_num
-            - call_count
-            - fps_sum
-        
-        - better to have mutex encompass all or just the parts that use above variable?
-  */
-
-  rc = pthread_mutex_lock(&time_mutex);
-  if(rc != 0){
-      syslog(LOG_ERR,"ERRROR fps calculation: mutex lock function failed: %s",strerror(rc));
-      // cleanup(false,0,0,local_w_file_fd);
-      // raise(SIGINT);
-      exit(SYSTEM_ERROR);
-  }
+  // int rc= 0;
+  int full_time = stop->tv_sec - start_60S->tv_sec;
+  int frme_time = stop->tv_sec - start_1S->tv_sec;
 
   frame_num++;
 
-  if(frme_time >= SECOND){
+  if(frme_time >= SECOND){ // after 1 second
     syslog(LOG_NOTICE, "FPS: %d frames in %d second", frame_num, frme_time);
     fps_sum += frame_num;
     call_count++;
     frame_num = 0;
-    clock_gettime(CLOCK_REALTIME, start_frame);
+    clock_gettime(CLOCK_REALTIME, start_1S);
   }
   
   // show when 60 seconds have passed
@@ -212,15 +196,7 @@ static void frame_time_calc(struct timespec *start,struct timespec *start_frame,
     syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg FPS **********************", full_time,fps_avg);
     fps_sum = 0;
     call_count = 0;
-    clock_gettime(CLOCK_REALTIME, start);
-  }
-
-  rc = pthread_mutex_unlock(&time_mutex);
-  if(rc != 0){
-      syslog(LOG_ERR,"ERRROR fps calculation: mutex unlock function failed: %s",strerror(rc));
-      // cleanup(false,0,0,local_w_file_fd);
-      // raise(SIGINT);
-      exit(SYSTEM_ERROR);
+    clock_gettime(CLOCK_REALTIME, start_60S);
   }
 
 }
@@ -437,8 +413,8 @@ void *frame_proc_thread(void *frame_thread_params){
   stopParams_t stopParams;
   laneParams_t laneParams;
 
-
-  
+  int rc= 0;
+  struct timespec end_frame;
   
   laneParams.lane_frame = frameParams->frame_gray(frameParams->lane_roi);    
   laneParams.lane_roi = frameParams->lane_roi;  
@@ -501,6 +477,28 @@ void *frame_proc_thread(void *frame_thread_params){
   }
 
   resize(frameParams->frame,frameParams->frame,Size(320,240));
+
+  clock_gettime(CLOCK_REALTIME, &end_frame);
+
+  // call mutex lock -> lock frame time calculation for each frame
+  rc = pthread_mutex_lock(&time_mutex);
+  if(rc != 0){
+      syslog(LOG_ERR,"ERRROR fps calculation: mutex lock function failed: %s",strerror(rc));
+      // cleanup(false,0,0,local_w_file_fd);
+      // raise(SIGINT);
+      exit(SYSTEM_ERROR);
+  }
+
+  frame_time_calc(&start_60S,&start_1S,&end_frame);
+
+  rc = pthread_mutex_unlock(&time_mutex);
+  if(rc != 0){
+      syslog(LOG_ERR,"ERRROR fps calculation: mutex unlock function failed: %s",strerror(rc));
+      // cleanup(false,0,0,local_w_file_fd);
+      // raise(SIGINT);
+      exit(SYSTEM_ERROR);
+  }
+
 
   // global_frame = frameParams->frame.clone();
 
@@ -650,15 +648,15 @@ int main( int argc, char** argv )
 
   }
 
-  struct timespec start,start_frame, end_frame;
+  // struct timespec start_60S,start_1S, end_frame;
   
   syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
   
   // start time for 1 minute comparison
-  clock_gettime(CLOCK_REALTIME, &start);
+  clock_gettime(CLOCK_REALTIME, &start_60S);
   
   // start time for frame
-  clock_gettime(CLOCK_REALTIME, &start_frame);
+  clock_gettime(CLOCK_REALTIME, &start_1S);
 
   while(1){
   //for(int i=0; i<NUM_FEAT; i++)
@@ -776,10 +774,10 @@ int main( int argc, char** argv )
     // frame_cnt++;
     
     // end time of current frame
-    clock_gettime(CLOCK_REALTIME, &end_frame);
+    // clock_gettime(CLOCK_REALTIME, &end_frame);
     
-    // frame_time_calc(&start,&start_frame,&end_frame,&frame_cnt);
-    frame_time_calc(&start,&start_frame,&end_frame);
+    // frame_time_calc(&start_60S,&start_1S,&end_frame,&frame_cnt);
+    // frame_time_calc(&start_60S,&start_1S,&end_frame);
     
     //if(threadParams[STOP_DETECT].stop_signs.size()){
       
