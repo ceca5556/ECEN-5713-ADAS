@@ -23,6 +23,7 @@
 #include <omp.h>
 
 // #include "lanelib.hpp"
+#include "queue.h"
 
 using namespace cv; using namespace std;
 // double alpha=1.0;  int beta=10;  /* contrast and brightness control */
@@ -60,6 +61,9 @@ typedef struct frameParams_s
   Size in_size;
 
   bool disp;
+  bool complete;
+
+  TAILQ_ENTRY(frameParams_s) next_frame;
 
 } frameParams_t;
 
@@ -93,6 +97,16 @@ typedef struct
   bool disp;
   
 } stopParams_t;
+
+typedef struct
+{
+  uint16_t total_frames;
+  bool *done;
+}displayParams_t;
+
+
+TAILQ_HEAD(frame_head, frameParams_s) frame_list;
+
 
 int lowThreshold = 17;
 const int max_lowThreshold = 200;
@@ -499,10 +513,78 @@ void *frame_proc_thread(void *frame_thread_params){
       exit(SYSTEM_ERROR);
   }
 
-
+  frameParams->complete = true;
   // global_frame = frameParams->frame.clone();
 
   // global_check = true;
+
+  return NULL;
+
+}
+
+void *frame_disp_thread(void *display_Params){
+
+  displayParams_t *dispParams = (displayParams_t*)display_Params;
+  uint16_t current_frames = 0;
+
+  // while(current_frames != dispParams->total_frames){
+  while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
+
+    if(TAILQ_EMPTY(&frame_list))
+          cout << "this list EMPTY" << endl;
+
+    if(*dispParams->done == true)
+      cout << "why is it still here" << endl;
+    // cout << "disp thread alive" << endl;
+    frameParams_t *frameParams = TAILQ_FIRST(&frame_list);
+    // cout << "frame pointer: " << frameParams << endl;
+
+
+    if(frameParams != NULL){
+    
+      if(frameParams->complete){
+        pthread_join(frameParams->thread_ID, NULL);
+
+        ///////////////////////////// display results from detection ///////////////////////////////// 
+
+        imshow(final_out,frameParams->frame);
+
+        TAILQ_REMOVE(&frame_list, frameParams, next_frame);
+
+        // if(TAILQ_EMPTY(&frame_list))
+        //   cout << "this list EMPTY" << endl;
+
+        delete frameParams;
+        current_frames++;
+      }
+    }
+
+    // if(OUT_WRITE){
+    //     output_vid.write(frame);
+    //   }
+      
+      
+      //////////////////////////////////////////////////////////////////////////////////////////////  
+
+    if ((winInput = waitKey(1)) == ESCAPE_KEY)
+    //if ((winInput = waitKey(0)) == ESCAPE_KEY)
+    {
+      *dispParams->done = true;
+        // break;
+    }
+    else if(winInput == 'L' || winInput == 'l'){
+      DISP_LINES ^= 1;
+      cout << "lines toggled: " << (DISP_LINES ? "on" : "off") << endl;
+    }
+    else if(winInput == 'S' || winInput == 's'){
+      DISP_STOP ^= 1;
+      cout << "stop signs toggled: " << (DISP_STOP ? "on" : "off") << endl;
+    }
+    else if(winInput == 32){
+      cout << "video stopped, press any key to resume" << endl;
+      waitKey();
+    }
+  }
 
   return NULL;
 
@@ -534,6 +616,8 @@ int main( int argc, char** argv )
   //CascadeClassifier stop_cascade;
   //Size in_size;
   //mode = false;
+  uint16_t total_frames = 0;
+  bool done = false;
   int rc = 0;
 
   // check for cam or video input
@@ -594,8 +678,11 @@ int main( int argc, char** argv )
     }
   }
   
-  // find height and width of video 
-  in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT));
+  // find properties of input
+  in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT)); //height and width of video 
+  total_frames = input.get(CAP_PROP_FRAME_COUNT); // frame count
+
+  cout << "total frames: " << total_frames << endl;
   
   // create output file if input given
   if(!out_file.empty()){
@@ -648,17 +735,28 @@ int main( int argc, char** argv )
 
   }
 
+  // initialize linked list
+  TAILQ_INIT(&frame_list);
   // struct timespec start_60S,start_1S, end_frame;
+  displayParams_t dispParams;
+  dispParams.total_frames = total_frames;
+  dispParams.done = &done;
+  pthread_t disp_thread_ID;
+  pthread_create(&disp_thread_ID,   // pointer to thread descriptor
+                   NULL,     // use default attributes
+                   frame_disp_thread, // thread function entry point
+                   (void *)(&dispParams) // parameters to pass in
+                  );
   
   syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
-  
+
   // start time for 1 minute comparison
   clock_gettime(CLOCK_REALTIME, &start_60S);
   
   // start time for frame
   clock_gettime(CLOCK_REALTIME, &start_1S);
 
-  while(1){
+  while(!done){
   //for(int i=0; i<NUM_FEAT; i++)
   //{
   
@@ -672,6 +770,7 @@ int main( int argc, char** argv )
       //  }
       //}
       waitKey(0);
+      done = true;
       break;
     } 
     
@@ -721,6 +820,7 @@ int main( int argc, char** argv )
     
     frameParams->disp = disp;
     frameParams->hog = hog;
+    frameParams->complete = false;
     
     // cout << "thread params set" << endl;
 
@@ -730,54 +830,33 @@ int main( int argc, char** argv )
                    (void *)(frameParams) // parameters to pass in
                   );
 
+    // cout << "created frame thread with ID: " << frameParams->thread_ID << endl;
+
+    TAILQ_INSERT_TAIL(&frame_list, frameParams,next_frame);
+
+    // frameParams_t *frameParams_check = TAILQ_FIRST(&frame_list);
+
+    // cout << "ID from list: " << frameParams_check->thread_ID << endl;
 
     ///////////////////////////////////////////////////////////////////////////////////////////////    
 
     // join and wait for all threads to finish
-    // for(int k=0;k<NUM_FEAT;k++)
-    //     pthread_join(threads[k], NULL);
-    pthread_join(frameParams->thread_ID, NULL);
+    // pthread_join(frameParams->thread_ID, NULL); //THIS ONE
 
     ///////////////////////////// display results from detection ///////////////////////////////// 
 
-    // // lanes
-    // Vec4i left_lane, right_lane;
-    
-    // //if(threadParams[LANE_DETECT].left_lane == 0);
-    // //  cout << "left empty" << endl;
-    // left_lane = threadParams[LANE_DETECT].left_lane;
-    
-    // //if(threadParams[LANE_DETECT].right_lane == 0);
-    // //  cout << "right empty" << endl;
-    // right_lane = threadParams[LANE_DETECT].right_lane;
-    
-    // if(DISP_LINES){
-      
-    
-    //   line( frame, Point(left_lane[0], left_lane[1]), Point(left_lane[2], left_lane[3]), Scalar(0,0,255), 3, LINE_AA);
-    //   line( frame, Point(right_lane[0], right_lane[1]), Point(right_lane[2], right_lane[3]), Scalar(0,0,255), 3, LINE_AA);
-    // }
-    
-    // // stop signs
-    // // int dist;
-    // //cout << threadParams[STOP_DETECT].stop_signs.size() << endl;
-    // if(DISP_STOP){
-    //   for(uint16_t k = 0; k<threadParams[STOP_DETECT].stop_signs.size();k++){
-    //       rectangle(frame, threadParams[STOP_DETECT].stop_signs[k], Scalar(49,49,255), 5);
-    //   }
-    // }
-    // frame display
-    imshow(final_out,frameParams->frame);
+    // if(frameParams->complete) //THIS ONE
+    //   imshow(final_out,frameParams->frame); //THIS ONE
 
-    delete frameParams;
+    // TAILQ_REMOVE(&frame_list, frameParams, next_frame); //THIS ONE
+
+    // if(TAILQ_EMPTY(&frame_list))
+    //   cout << "this list EMPTY" << endl;
+
+    // delete frameParams; //THIS ONE
     
     // frame_cnt++;
     
-    // end time of current frame
-    // clock_gettime(CLOCK_REALTIME, &end_frame);
-    
-    // frame_time_calc(&start_60S,&start_1S,&end_frame,&frame_cnt);
-    // frame_time_calc(&start_60S,&start_1S,&end_frame);
     
     //if(threadParams[STOP_DETECT].stop_signs.size()){
       
@@ -793,33 +872,36 @@ int main( int argc, char** argv )
     
     // write to output file
     if(OUT_WRITE){
-      output_vid.write(frame);
+      // output_vid.write(frame);
+      cout << "out write is true" << endl;
     }
     
     
     //////////////////////////////////////////////////////////////////////////////////////////////  
 
-    if ((winInput = waitKey(1)) == ESCAPE_KEY)
-    //if ((winInput = waitKey(0)) == ESCAPE_KEY)
-    {
-        break;
-    }
-    else if(winInput == 'L' || winInput == 'l'){
-      DISP_LINES ^= 1;
-      cout << "lines toggled: " << (DISP_LINES ? "on" : "off") << endl;
-    }
-    else if(winInput == 'S' || winInput == 's'){
-      DISP_STOP ^= 1;
-      cout << "stop signs toggled: " << (DISP_STOP ? "on" : "off") << endl;
-    }
-    else if(winInput == 32){
-      cout << "video stopped, press any key to resume" << endl;
-      waitKey();
-    }
+    // if ((winInput = waitKey(1)) == ESCAPE_KEY)
+    // //if ((winInput = waitKey(0)) == ESCAPE_KEY)
+    // {
+    //     break;
+    // }
+    // else if(winInput == 'L' || winInput == 'l'){
+    //   DISP_LINES ^= 1;
+    //   cout << "lines toggled: " << (DISP_LINES ? "on" : "off") << endl;
+    // }
+    // else if(winInput == 'S' || winInput == 's'){
+    //   DISP_STOP ^= 1;
+    //   cout << "stop signs toggled: " << (DISP_STOP ? "on" : "off") << endl;
+    // }
+    // else if(winInput == 32){
+    //   cout << "video stopped, press any key to resume" << endl;
+    //   waitKey();
+    // }
   }
-    
-
   
+  cout << "exited main while loop" << endl;
+  pthread_join(disp_thread_ID, NULL);
+  
+  cout << "joined disp_thread" << endl;
   //cout << "true positive: " << TPR << endl;
   //cout << "false positive: " << FPR << endl;
   //cout << "total detects: " << (TPR + FPR) << endl;
