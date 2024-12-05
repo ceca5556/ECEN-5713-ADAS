@@ -39,6 +39,7 @@ using namespace cv; using namespace std;
 #define LANE_DETECT (0)
 #define STOP_DETECT (1)
 
+#define SIZE_240P (Size(320,240))
 
 #define SECOND   (1)
 #define MINUTE   (60)
@@ -59,6 +60,7 @@ typedef struct frameParams_s
   bool hog;
   
   Size in_size;
+  Size des_size;
 
   bool disp;
   bool complete;
@@ -100,8 +102,16 @@ typedef struct
 
 typedef struct
 {
-  uint16_t total_frames;
+  // uint16_t total_frames;
+  bool save_to_video;
   bool *done;
+
+  // VideoWriter output_vid;
+  int in_fps;
+  int fourcc_code_out;
+  Size des_size;
+  string out_file;
+
 }displayParams_t;
 
 
@@ -490,7 +500,8 @@ void *frame_proc_thread(void *frame_thread_params){
     }
   }
 
-  resize(frameParams->frame,frameParams->frame,Size(320,240));
+  // resize(frameParams->frame,frameParams->frame,Size(320,240));
+  resize(frameParams->frame,frameParams->frame,frameParams->des_size);
 
   clock_gettime(CLOCK_REALTIME, &end_frame);
 
@@ -524,17 +535,29 @@ void *frame_proc_thread(void *frame_thread_params){
 
 void *frame_disp_thread(void *display_Params){
 
+  /* TODO:
+        should pressing esc immediately stop display or should it display any remaining frames?
+        currently doing latter, but if former:
+            add code to go through and kill remaining frame threads
+            delete frameParams
+  */
+
   displayParams_t *dispParams = (displayParams_t*)display_Params;
   uint16_t current_frames = 0;
+
+  VideoWriter  output_vid;
+
+  if(dispParams->save_to_video)
+    output_vid.open(dispParams->out_file, dispParams->fourcc_code_out, dispParams->in_fps, dispParams->des_size,true);
 
   // while(current_frames != dispParams->total_frames){
   while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
 
-    if(TAILQ_EMPTY(&frame_list))
-          cout << "this list EMPTY" << endl;
+    // if(TAILQ_EMPTY(&frame_list))
+    //       cout << "this list EMPTY" << endl;
 
-    if(*dispParams->done == true)
-      cout << "why is it still here" << endl;
+    // if(*dispParams->done == true)
+    //   cout << "why is it still here" << endl;
     // cout << "disp thread alive" << endl;
     frameParams_t *frameParams = TAILQ_FIRST(&frame_list);
     // cout << "frame pointer: " << frameParams << endl;
@@ -547,7 +570,12 @@ void *frame_disp_thread(void *display_Params){
 
         ///////////////////////////// display results from detection ///////////////////////////////// 
 
-        imshow(final_out,frameParams->frame);
+        if(dispParams->save_to_video){
+          output_vid.write(frameParams->frame);
+        }
+        else{
+          imshow(final_out,frameParams->frame);
+        }
 
         TAILQ_REMOVE(&frame_list, frameParams, next_frame);
 
@@ -556,12 +584,10 @@ void *frame_disp_thread(void *display_Params){
 
         delete frameParams;
         current_frames++;
+
+        syslog(LOG_NOTICE, "Display: frame #%d completed", current_frames);
       }
     }
-
-    // if(OUT_WRITE){
-    //     output_vid.write(frame);
-    //   }
       
       
       //////////////////////////////////////////////////////////////////////////////////////////////  
@@ -608,11 +634,15 @@ int main( int argc, char** argv )
 {
     
   VideoCapture input;
-  VideoWriter  output_vid;
+  // VideoWriter  output_vid;
+  displayParams_t dispParams;
   //VideoCapture cap;
   //int frame_tot = 0; 
   // int frame_cnt = 0;
-  bool OUT_WRITE = 0;
+  bool OUT_WRITE = false;
+  int in_fps = 0;
+  int fourcc_code_out = 0;
+  Size desired_size = SIZE_240P;
   //CascadeClassifier stop_cascade;
   //Size in_size;
   //mode = false;
@@ -686,10 +716,12 @@ int main( int argc, char** argv )
   
   // create output file if input given
   if(!out_file.empty()){
-    int in_fps = input.get(CAP_PROP_FPS);
-    int fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
-    output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
-    OUT_WRITE = 1;
+    in_fps = input.get(CAP_PROP_FPS);
+    fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
+    // output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
+    OUT_WRITE = true;
+    desired_size = in_size;
+
   }
   
   // create windows
@@ -738,9 +770,14 @@ int main( int argc, char** argv )
   // initialize linked list
   TAILQ_INIT(&frame_list);
   // struct timespec start_60S,start_1S, end_frame;
-  displayParams_t dispParams;
-  dispParams.total_frames = total_frames;
+  // dispParams.total_frames = total_frames;
   dispParams.done = &done;
+  // dispParams.output_vid = output_vid;
+  dispParams.save_to_video = OUT_WRITE;
+  dispParams.in_fps = in_fps;
+  dispParams.fourcc_code_out = fourcc_code_out;
+  dispParams.des_size = desired_size;
+  dispParams.out_file = out_file;
   pthread_t disp_thread_ID;
   pthread_create(&disp_thread_ID,   // pointer to thread descriptor
                    NULL,     // use default attributes
@@ -806,6 +843,7 @@ int main( int argc, char** argv )
     frameParams->lane_roi = lane_roi;
     
     frameParams->in_size = in_size;
+    frameParams->des_size = desired_size;
 
 
     /////////////////////////// thread stuff for stop detection /////////////////////////////////  
@@ -871,10 +909,10 @@ int main( int argc, char** argv )
     //}
     
     // write to output file
-    if(OUT_WRITE){
-      // output_vid.write(frame);
-      cout << "out write is true" << endl;
-    }
+    // if(OUT_WRITE){
+    //   // output_vid.write(frame);
+    //   cout << "out write is true" << endl;
+    // }
     
     
     //////////////////////////////////////////////////////////////////////////////////////////////  
