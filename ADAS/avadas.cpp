@@ -211,7 +211,7 @@ static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S
     fps_sum += frame_num;
     call_count++;
     frame_num = 0;
-    clock_gettime(CLOCK_REALTIME, start_1S);
+    clock_gettime(CLOCK_MONOTONIC, start_1S);
   }
   
   // show when 60 seconds have passed
@@ -220,7 +220,7 @@ static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S
     syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg FPS **********************", full_time,fps_avg);
     fps_sum = 0;
     call_count = 0;
-    clock_gettime(CLOCK_REALTIME, start_60S);
+    clock_gettime(CLOCK_MONOTONIC, start_60S);
   }
 
 }
@@ -503,7 +503,7 @@ void *frame_proc_thread(void *frame_thread_params){
   // resize(frameParams->frame,frameParams->frame,Size(320,240));
   resize(frameParams->frame,frameParams->frame,frameParams->des_size);
 
-  clock_gettime(CLOCK_REALTIME, &end_frame);
+  clock_gettime(CLOCK_MONOTONIC, &end_frame);
 
   // call mutex lock -> lock frame time calculation for each frame
   rc = pthread_mutex_lock(&time_mutex);
@@ -788,10 +788,12 @@ int main( int argc, char** argv )
   syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
 
   // start time for 1 minute comparison
-  clock_gettime(CLOCK_REALTIME, &start_60S);
+  clock_gettime(CLOCK_MONOTONIC, &start_60S);
+
+  // cout << start_60S.tv_sec << endl;
   
   // start time for frame
-  clock_gettime(CLOCK_REALTIME, &start_1S);
+  clock_gettime(CLOCK_MONOTONIC, &start_1S);
 
   while(!done){
   //for(int i=0; i<NUM_FEAT; i++)
@@ -800,13 +802,13 @@ int main( int argc, char** argv )
   
       // read in frame
     if(!input.read(frame)){
-      cout << "no more frames, video over press any key to continue" << endl;
+      cout << "all frames have finished processing, displaying remaining frames" << endl;
       //while(1){
       //  if((winInput = waitKey(0)) == ESCAPE_KEY){ 
       //    break;
       //  }
       //}
-      waitKey(0);
+      // waitKey(0);
       done = true;
       break;
     } 
@@ -936,7 +938,7 @@ int main( int argc, char** argv )
     // }
   }
   
-  cout << "exited main while loop" << endl;
+  cout << "exited main loop" << endl;
   pthread_join(disp_thread_ID, NULL);
   
   cout << "joined disp_thread" << endl;
