@@ -906,6 +906,11 @@ int main( int argc, char** argv )
       }
     }
   
+  //////////////////// get input propeties ////////////  
+    // find properties of input
+    in_fps = input.get(CAP_PROP_FPS);
+    in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT)); //height and width of video 
+    total_frames = input.get(CAP_PROP_FRAME_COUNT); // frame count
 
   //////////////////// create output file if necessary ////////////  
     // create output file if input given
@@ -917,12 +922,7 @@ int main( int argc, char** argv )
 
     }
 
-  //////////////////// get input propeties ////////////  
-    // find properties of input
-    in_fps = input.get(CAP_PROP_FPS);
-    in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT)); //height and width of video 
-    total_frames = input.get(CAP_PROP_FRAME_COUNT); // frame count
-
+  //////////////////// print important propeties //////////// 
     cout << endl << "************** properties **************" << endl; 
     cout << "total frames: " << total_frames << endl;
     cout << "input fps: " << in_fps << endl;
