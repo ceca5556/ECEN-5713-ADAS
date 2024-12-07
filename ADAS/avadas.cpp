@@ -21,6 +21,8 @@
 #include <unistd.h>
 #include <syslog.h>
 #include <omp.h>
+#include <signal.h>
+#include <errno.h>
 
 // #include "lanelib.hpp"
 #include "queue.h"
@@ -52,6 +54,7 @@ typedef struct frameParams_s
   int frameIdx;
   Mat frame;
   Mat frame_gray;
+  int *proc_frame_cnt;
 
   Rect lane_roi;
 
@@ -64,6 +67,8 @@ typedef struct frameParams_s
 
   bool disp;
   bool complete;
+
+  pthread_mutex_t *proc_frame_mutex;
 
   TAILQ_ENTRY(frameParams_s) next_frame;
 
@@ -107,12 +112,30 @@ typedef struct
   bool *done;
 
   // VideoWriter output_vid;
+  int *disp_frame_cnt;
   int in_fps;
   int fourcc_code_out;
   Size des_size;
   string out_file;
 
+  pthread_mutex_t *disp_frame_mutex;
+
 }displayParams_t;
+
+typedef struct{
+
+  pthread_mutex_t timer_mutex;
+  int call_count;
+
+  pthread_mutex_t *proc_frame_mutex;
+  int tot_proc_frame_cnt;
+  int *proc_frame_cnt;
+
+  pthread_mutex_t *disp_frame_mutex;
+  int tot_disp_frame_cnt;
+  int *disp_frame_cnt;
+
+}timerParams_t;
 
 
 TAILQ_HEAD(frame_head, frameParams_s) frame_list;
@@ -143,7 +166,7 @@ bool DISP_STOP = true;
 
 const string final_out = "output";
 
-Size in_size;
+// Size in_size;
 
 int lane_roi_top_offset = 125;
 int lane_roi_bottom_offset = 375;
@@ -168,6 +191,9 @@ static float sensor_width = 4.55; // milimeters
 
 struct timespec start_60S,start_1S;
 pthread_mutex_t time_mutex;
+
+// int proc_frame_num;
+// int disp_frame_num;
 
 
 /**************************************************************
@@ -194,36 +220,169 @@ pthread_mutex_t time_mutex;
 *
 ***************************************************************/
 // static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop,int *frame_num){
-static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S, struct timespec *stop){
+// static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S, struct timespec *stop){
   
-  static int fps_sum;
-  static int call_count;
-  static int frame_num;
+//   static int fps_sum;
+//   static int call_count;
+//   static int frame_num;
 
-  // int rc= 0;
-  int full_time = stop->tv_sec - start_60S->tv_sec;
-  int frme_time = stop->tv_sec - start_1S->tv_sec;
+//   // int rc= 0;
+//   int full_time = stop->tv_sec - start_60S->tv_sec;
+//   int frme_time = stop->tv_sec - start_1S->tv_sec;
 
-  frame_num++;
+//   frame_num++;
 
-  if(frme_time >= SECOND){ // after 1 second
-    syslog(LOG_NOTICE, "FPS: %d frames in %d second", frame_num, frme_time);
-    fps_sum += frame_num;
-    call_count++;
-    frame_num = 0;
-    clock_gettime(CLOCK_MONOTONIC, start_1S);
-  }
+//   if(frme_time >= SECOND){ // after 1 second
+//     syslog(LOG_NOTICE, "FPS: %d frames in %d second", frame_num, frme_time);
+//     fps_sum += frame_num;
+//     call_count++;
+//     frame_num = 0;
+//     clock_gettime(CLOCK_MONOTONIC, start_1S);
+//   }
   
-  // show when 60 seconds have passed
-  if(full_time >= MINUTE){
-    int fps_avg = fps_sum/call_count;
-    syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg FPS **********************", full_time,fps_avg);
-    fps_sum = 0;
-    call_count = 0;
-    clock_gettime(CLOCK_MONOTONIC, start_60S);
-  }
+//   // show when 60 seconds have passed
+//   if(full_time >= MINUTE){
+//     int fps_avg = fps_sum/call_count;
+//     syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg FPS **********************", full_time,fps_avg);
+//     fps_sum = 0;
+//     call_count = 0;
+//     clock_gettime(CLOCK_MONOTONIC, start_60S);
+//   }
+
+// }
+
+static void frame_time_calc_thread(union sigval sigval){
+  
+  // static int fps_sum;
+  // static int call_count;
+  // static int frame_num;
+
+  int rc= 0;
+  // int temp_call_count = 0;
+  int temp_proc_frames = 0;
+  int temp_disp_frames = 0;
+  // int temp_tot_proc = 0;
+  // int temp_tot_disp = 0;
+
+  // static int call_count;
+  // static int tot_proc;
+  // static int tot_disp;
+  // int full_time = stop->tv_sec - start_60S->tv_sec;
+  // int frme_time = stop->tv_sec - start_1S->tv_sec;
+
+  timerParams_t *timerParams = (timerParams_t*) sigval.sival_ptr;
+
+  /////////////////////// lock /////////////////////
+    // lock timer
+    // rc = pthread_mutex_lock(&timerParams->timer_mutex);
+    // if(rc != 0){
+    //     syslog(LOG_ERR,"ERRROR fps calc thread: timer mutex lock function failed: %s",strerror(rc));
+    //     // cleanup(false,0,0,local_w_file_fd);
+    //     // raise(SIGINT);
+    //     exit(SYSTEM_ERROR);
+    // }
+    // lock proc frame
+    rc = pthread_mutex_lock(timerParams->proc_frame_mutex);
+    if(rc != 0){
+        syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
+        // cleanup(false,0,0,local_w_file_fd);
+        // raise(SIGINT);
+        exit(SYSTEM_ERROR);
+    }
+    // lock disp frame
+    rc = pthread_mutex_lock(timerParams->disp_frame_mutex);
+    if(rc != 0){
+        syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
+        // cleanup(false,0,0,local_w_file_fd);
+        // raise(SIGINT);
+        exit(SYSTEM_ERROR);
+    }
+
+  /////////////////////// perform needed operations /////////////////////
+  // timerParams->call_count++;
+  temp_proc_frames = *timerParams->proc_frame_cnt;
+  temp_disp_frames = *timerParams->disp_frame_cnt;
+
+  // tot_proc += temp_proc_frames;
+  // tot_disp += temp_disp_frames;
+
+  // temp_tot_disp = 
+
+  *timerParams->proc_frame_cnt = 0;
+  *timerParams->disp_frame_cnt = 0;
+  // cout << "timer thread called: " << timerParams->call_count << "times" << endl;
+
+  /////////////////////// unlock /////////////////////
+    //unlock disp
+    rc = pthread_mutex_unlock(timerParams->disp_frame_mutex);
+    if(rc != 0){
+        syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
+        // cleanup(false,0,0,local_w_file_fd);
+        // raise(SIGINT);
+        exit(SYSTEM_ERROR);
+    }
+
+    // unlock proc
+    rc = pthread_mutex_unlock(timerParams->proc_frame_mutex);
+    if(rc != 0){
+        syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
+        // cleanup(false,0,0,local_w_file_fd);
+        // raise(SIGINT);
+        exit(SYSTEM_ERROR);
+    }
+
+    // unlock timer
+    // rc = pthread_mutex_unlock(&timerParams->timer_mutex);
+    // if(rc != 0){
+    //     syslog(LOG_ERR,"ERRROR fps calc thread: mutex lock function failed: %s",strerror(rc));
+    //     // cleanup(false,0,0,local_w_file_fd);
+    //     // raise(SIGINT);
+    //     exit(SYSTEM_ERROR);
+    // }
+
+  /////////////////////// other calculations /////////////////////
+  syslog(LOG_NOTICE,"P-FPS (processing): %d frames in 1 second",temp_proc_frames);
+  syslog(LOG_NOTICE,"D-FPS (displaying): %d frames in 1 second",temp_disp_frames);
+
 
 }
+
+// static void *frame_time_calc_1S(void){
+
+//   static int tot_proc_frames;
+//   static int tot_disp_frames;
+
+//   int temp_proc = proc_frame_num;
+//   int temp_disp = disp_frame_num;
+
+//   syslog(LOG_NOTICE, "FPS: %d frames processed in 1 second", (temp_proc - tot_proc_frames));
+//   syslog(LOG_NOTICE, "FPS: %d frames displayed in 1 second", (temp_disp - tot_disp_frames));
+  
+//   tot_proc_frames += temp_proc;
+//   tot_disp_frames += temp_disp;
+  
+//   return NULL;
+  
+  
+// }
+
+// static void *frame_time_calc_60S(void){
+
+//   static int tot_proc_frames;
+//   static int tot_disp_frames;
+
+//   int temp_proc = proc_frame_num;
+//   int temp_disp = disp_frame_num;
+
+//   syslog(LOG_NOTICE, "FPS: %d frames processed in 1 minute", (temp_proc - tot_proc_frames));
+//   syslog(LOG_NOTICE, "FPS: %d frames displayed in 1 minute", (temp_disp - tot_disp_frames));
+  
+//   tot_proc_frames += temp_proc;
+//   tot_disp_frames += temp_disp;
+  
+//   return NULL;
+  
+// }
 
 
 /**************************************************************
@@ -273,7 +432,7 @@ static void canny_edge(Mat *frame,
 /*
 *    stop sign distance estimation
 */
-int stop_dist(Rect rectangle, float f){
+int stop_dist(Rect rectangle, float f,Size in_size){
 
   int sign_width = 750; // in mm
   int pixels = rectangle.width; // pixel width of detected 
@@ -320,7 +479,7 @@ void *stop_detect(void *threadp){
           threadParams->stop_signs[k].x += threadParams->stop_roi.x;
           threadParams->stop_signs[k].y += threadParams->stop_roi.y;
           
-          dist = stop_dist(threadParams->stop_signs[k],threadParams->focal);
+          dist = stop_dist(threadParams->stop_signs[k],threadParams->focal,threadParams->in_size);
           syslog(LOG_NOTICE, "STOP_SIGN: stop sign #%d/%d distance: %02f mm", k+1,detected_num, dist);
         
       }
@@ -331,7 +490,7 @@ void *stop_detect(void *threadp){
 }
 
 
-void lane_check(Vec4i left_lane, Vec4i right_lane){
+void lane_check(Vec4i left_lane, Vec4i right_lane,Size in_size){
 
     int center = in_size.width/2;
     
@@ -378,7 +537,7 @@ void *lane_detect(void *threadp){
     
     //Vec4i left_lane, right_lane;
     int Lx = 0;
-    int Rx = in_size.width;
+    int Rx = threadParams->in_size.width;
     Vec4i l;
     
     
@@ -395,11 +554,11 @@ void *lane_detect(void *threadp){
           l = lines[k];
           if((abs(l[1] - l[3]) > lane_line_thresh)){// && DISP_LINES){
         
-            if((l[0] > Lx) && (l[0] < (in_size.width/2))){
+            if((l[0] > Lx) && (l[0] < (threadParams->in_size.width/2))){
               threadParams->left_lane = l;
               Lx = l[0];
             }
-            else if((l[0] < Rx) && (l[0] > (in_size.width/2))){
+            else if((l[0] < Rx) && (l[0] > (threadParams->in_size.width/2))){
 
               threadParams->right_lane = l;
               Rx = l[0];
@@ -421,7 +580,7 @@ void *lane_detect(void *threadp){
     
     
     
-    lane_check(threadParams->left_lane,threadParams->right_lane);
+    lane_check(threadParams->left_lane,threadParams->right_lane,threadParams->in_size);
 
     return NULL;
 
@@ -506,7 +665,7 @@ void *frame_proc_thread(void *frame_thread_params){
   clock_gettime(CLOCK_MONOTONIC, &end_frame);
 
   // call mutex lock -> lock frame time calculation for each frame
-  rc = pthread_mutex_lock(&time_mutex);
+  rc = pthread_mutex_lock(frameParams->proc_frame_mutex);
   if(rc != 0){
       syslog(LOG_ERR,"ERRROR fps calculation: mutex lock function failed: %s",strerror(rc));
       // cleanup(false,0,0,local_w_file_fd);
@@ -514,9 +673,10 @@ void *frame_proc_thread(void *frame_thread_params){
       exit(SYSTEM_ERROR);
   }
 
-  frame_time_calc(&start_60S,&start_1S,&end_frame);
+  // frame_time_calc(&start_60S,&start_1S,&end_frame);
+  *frameParams->proc_frame_cnt = *frameParams->proc_frame_cnt + 1;
 
-  rc = pthread_mutex_unlock(&time_mutex);
+  rc = pthread_mutex_unlock(frameParams->proc_frame_mutex);
   if(rc != 0){
       syslog(LOG_ERR,"ERRROR fps calculation: mutex unlock function failed: %s",strerror(rc));
       // cleanup(false,0,0,local_w_file_fd);
@@ -542,6 +702,8 @@ void *frame_disp_thread(void *display_Params){
             delete frameParams
   */
 
+  int rc = 0;
+
   displayParams_t *dispParams = (displayParams_t*)display_Params;
   uint16_t current_frames = 0;
 
@@ -550,8 +712,8 @@ void *frame_disp_thread(void *display_Params){
   if(dispParams->save_to_video)
     output_vid.open(dispParams->out_file, dispParams->fourcc_code_out, dispParams->in_fps, dispParams->des_size,true);
 
-  // while(current_frames != dispParams->total_frames){
   while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
+  // while((!*dispParams->done)){
 
     // if(TAILQ_EMPTY(&frame_list))
     //       cout << "this list EMPTY" << endl;
@@ -583,33 +745,54 @@ void *frame_disp_thread(void *display_Params){
         //   cout << "this list EMPTY" << endl;
 
         delete frameParams;
+
+        rc = pthread_mutex_lock(dispParams->disp_frame_mutex);
+        if(rc != 0){
+            syslog(LOG_ERR,"ERRROR display thread: display mutex lock function failed: %s",strerror(rc));
+            // cleanup(false,0,0,local_w_file_fd);
+            // raise(SIGINT);
+            exit(SYSTEM_ERROR);
+        }
+
+        *dispParams->disp_frame_cnt = *dispParams->disp_frame_cnt +1;
+
+        rc = pthread_mutex_unlock(dispParams->disp_frame_mutex);
+        if(rc != 0){
+            syslog(LOG_ERR,"ERRROR display thread: display mutex unlock function failed: %s",strerror(rc));
+            // cleanup(false,0,0,local_w_file_fd);
+            // raise(SIGINT);
+            exit(SYSTEM_ERROR);
+        }
+
         current_frames++;
 
-        syslog(LOG_NOTICE, "Display: frame #%d completed", current_frames);
+        // syslog(LOG_NOTICE, "Display: frame #%d completed", current_frames);
       }
     }
       
-      
-      //////////////////////////////////////////////////////////////////////////////////////////////  
+    if(!(current_frames % 100) && dispParams->save_to_video)
+      cout << current_frames << "displayed" << endl;
 
-    if ((winInput = waitKey(1)) == ESCAPE_KEY)
-    //if ((winInput = waitKey(0)) == ESCAPE_KEY)
-    {
-      *dispParams->done = true;
-        // break;
-    }
-    else if(winInput == 'L' || winInput == 'l'){
-      DISP_LINES ^= 1;
-      cout << "lines toggled: " << (DISP_LINES ? "on" : "off") << endl;
-    }
-    else if(winInput == 'S' || winInput == 's'){
-      DISP_STOP ^= 1;
-      cout << "stop signs toggled: " << (DISP_STOP ? "on" : "off") << endl;
-    }
-    else if(winInput == 32){
-      cout << "video stopped, press any key to resume" << endl;
-      waitKey();
-    }
+    //////////////////////////////////////////////////////////////////////////////////////////////  
+
+      if ((winInput = waitKey(1)) == ESCAPE_KEY)
+      //if ((winInput = waitKey(0)) == ESCAPE_KEY)
+      {
+        *dispParams->done = true;
+          // break;
+      }
+      else if(winInput == 'L' || winInput == 'l'){
+        DISP_LINES ^= 1;
+        cout << "lines toggled: " << (DISP_LINES ? "on" : "off") << endl;
+      }
+      else if(winInput == 'S' || winInput == 's'){
+        DISP_STOP ^= 1;
+        cout << "stop signs toggled: " << (DISP_STOP ? "on" : "off") << endl;
+      }
+      else if(winInput == 32){
+        cout << "video stopped, press any key to resume" << endl;
+        waitKey();
+      }
   }
 
   return NULL;
@@ -632,318 +815,345 @@ static const string keys =  "{ help h | | print help message }"
 */
 int main( int argc, char** argv )
 {
-    
-  VideoCapture input;
-  // VideoWriter  output_vid;
-  displayParams_t dispParams;
-  //VideoCapture cap;
-  //int frame_tot = 0; 
-  // int frame_cnt = 0;
-  bool OUT_WRITE = false;
-  int in_fps = 0;
-  int fourcc_code_out = 0;
-  Size desired_size = SIZE_240P;
-  //CascadeClassifier stop_cascade;
-  //Size in_size;
-  //mode = false;
-  uint16_t total_frames = 0;
-  bool done = false;
-  int rc = 0;
 
-  // check for cam or video input
-  CommandLineParser parser(argc, argv, keys);
-  if (parser.has("help"))
-  {
-    parser.printMessage();
-    return 0;
-  }
-  
-  int camera = parser.get<int>("camera");
-  string file = parser.get<string>("video");
-  bool disp = parser.get<bool>("display");
-  string xml = parser.get<string>("xml");
-  bool hog = parser.get<bool>("hog");
-  float focal = parser.get<float>("focal");
-  string out_file = parser.get<string>("store");
-  
-  
-  if (!parser.check())
-  {
-    parser.printErrors();
-    return 1;
-  }
-  
-  // check video file or cam
-  if (file.empty())
-  {
-    input.open(camera);
-    //cap.set(CAP_PROP_FRAME_WIDTH, WIDTH);
-    //cap.set(CAP_PROP_FRAME_HEIGHT, HEIGHT);
-  }
-  else
-  {
-    file = samples::findFileOrKeep(file);
-    input.open(file);
-  
-  }
-  
-  // confirm input can be opened
-  if (!input.isOpened())
-  {
-    cout << "Can not open video stream: '" << (file.empty() ? "<camera>" : file) << "'" << endl;
-    return 2;
-  }
-  
-  // load xml
-  if(hog){
-    if(!stop_hog.load(xml)){
-      cout << "\nERROR: failed to load xml file\n" << endl;
+  int rc = 0; 
+  //////////////////// declare timer variables /////////////
+    timerParams_t timerParams;
+    struct sigevent sev;
+    timer_t timerid;
+    int clock_id;
+    // struct timespec start_time;
+    struct itimerspec timer;
+
+    memset(&timerParams,0,sizeof(timerParams_t));
+    memset(&sev,0,sizeof(struct sigevent));
+    memset(&timer, 0, sizeof(struct itimerspec));
+
+  //////////////////// declare opencv variables ////////////  
+    VideoCapture input;
+    // VideoWriter  output_vid;
+    displayParams_t dispParams;
+    pthread_t disp_thread_ID;
+    //VideoCapture cap;
+    //int frame_tot = 0; 
+    int proc_frame_cnt = 0;
+    int disp_frame_cnt = 0;
+
+    pthread_mutex_t proc_frame_mutex;
+    pthread_mutex_t disp_frame_mutex;
+
+    bool OUT_WRITE = false;
+    int in_fps = 0;
+    int fourcc_code_out = 0;
+    Size desired_size = SIZE_240P;
+    //CascadeClassifier stop_cascade;
+    Size in_size;
+    //mode = false;
+    uint16_t total_frames = 0;
+    bool done = false;
+
+  //////////////////// initialize timer variables ////////////  
+
+    /* the following code was based off of the example at:
+        https://github.com/cu-ecen-aeld/aesd-lectures/blob/master/lecture9/timer_thread.c
+    */
+    clock_id = CLOCK_MONOTONIC;
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_value.sival_ptr = &timerParams;
+    sev.sigev_notify_function = frame_time_calc_thread;
+
+    timer.it_interval.tv_sec = 1;
+    timer.it_interval.tv_nsec = 0;
+
+    if ( timer_create(clock_id,&sev,&timerid) != 0 ) {
+      // printf("Error creating timer\n",errno,strerror(errno));
+      cout << "ERROR: could not create timer: " << strerror(errno) << endl;
       exit(SYSTEM_ERROR);
-    }
-  }
-  else{
-    if(!stop_cascade.load(xml)){
-      cout << "\nERROR: failed to load xml file\n" << endl;
-      exit(SYSTEM_ERROR);
-    }
-  }
-  
-  // find properties of input
-  in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT)); //height and width of video 
-  total_frames = input.get(CAP_PROP_FRAME_COUNT); // frame count
-
-  cout << "total frames: " << total_frames << endl;
-  
-  // create output file if input given
-  if(!out_file.empty()){
-    in_fps = input.get(CAP_PROP_FPS);
-    fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
-    // output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
-    OUT_WRITE = true;
-    desired_size = in_size;
-
-  }
-  
-  // create windows
-  if(disp){
-    namedWindow("original",WINDOW_NORMAL);
-    namedWindow("grayscale",WINDOW_NORMAL);
-  }
-  namedWindow(final_out,WINDOW_NORMAL);
-
-  Mat frame, frame_gray;
-  
-  // DETECTION ROI
-  Rect lane_roi(0 + lane_roi_width_offset,                  // x starting point
-                in_size.height/2 + lane_roi_top_offset,      // y start
-                in_size.width - lane_roi_width_offset,       // width
-                in_size.height/2 - lane_roi_bottom_offset);  // height
-                
-  Rect stop_roi(in_size.width/2 + stop_roi_left_offset,         // x starting point
-                0 + stop_roi_top_offset,                      // y starting point
-                in_size.width/2 - stop_roi_left_offset,        // width
-                in_size.height/2 - stop_roi_bottom_offset);   // height
-                
-  
-  // DISPLAY TOGGLES
-  // bool DISP_LINES = false;
-  // bool DISP_STOP = false;
-  
-  //int TPR = 0;
-  //int FPR = 0;
-
-  
-///////////////////////////////// begin frame processing /////////////////////////////////    
-  
-  // cpu_set_t cpuset;
-  // int core_id;
-  // int max_prio, rc;
-  
-  rc = pthread_mutex_init(&time_mutex,NULL);
-  if(rc != 0){
-
-      syslog(LOG_ERR, "ERROR: could not succesfully initialize mutex, error number: %d", rc);
-      return SYSTEM_ERROR;
-
-  }
-
-  // initialize linked list
-  TAILQ_INIT(&frame_list);
-  // struct timespec start_60S,start_1S, end_frame;
-  // dispParams.total_frames = total_frames;
-  dispParams.done = &done;
-  // dispParams.output_vid = output_vid;
-  dispParams.save_to_video = OUT_WRITE;
-  dispParams.in_fps = in_fps;
-  dispParams.fourcc_code_out = fourcc_code_out;
-  dispParams.des_size = desired_size;
-  dispParams.out_file = out_file;
-  pthread_t disp_thread_ID;
-  pthread_create(&disp_thread_ID,   // pointer to thread descriptor
-                   NULL,     // use default attributes
-                   frame_disp_thread, // thread function entry point
-                   (void *)(&dispParams) // parameters to pass in
-                  );
-  
-  syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
-
-  // start time for 1 minute comparison
-  clock_gettime(CLOCK_MONOTONIC, &start_60S);
-
-  // cout << start_60S.tv_sec << endl;
-  
-  // start time for frame
-  clock_gettime(CLOCK_MONOTONIC, &start_1S);
-
-  while(!done){
-  //for(int i=0; i<NUM_FEAT; i++)
-  //{
-  
-  
-      // read in frame
-    if(!input.read(frame)){
-      cout << "all frames have finished processing, displaying remaining frames" << endl;
-      //while(1){
-      //  if((winInput = waitKey(0)) == ESCAPE_KEY){ 
-      //    break;
-      //  }
-      //}
-      // waitKey(0);
-      done = true;
-      break;
     } 
-    
-    if(disp)
-      imshow("original", frame);
-    
-    // grayscale and blur
-    cvtColor( frame, frame_gray, COLOR_BGR2GRAY );
-    GaussianBlur(frame_gray, frame_gray, Size(9,9), 2, 2);
 
-    if(disp)
-      imshow("grayscale", frame_gray );
-    
-    
-    //////////////////////////// thread stuff for lane detection /////////////////////////////////    
-    // cout << sizeof(frameParams_t) << endl;
-    // frameParams_t *frameParams = (frameParams_t*)malloc(sizeof(frameParams_t));
-    frameParams_t *frameParams = new frameParams_t;
-    // threadParams->frameIdx = LANE_DETECT;
 
-    if(frameParams == NULL){
-      cout << "unable to malloc memory for frame params" << endl;
+  //////////////////// check input arguments ////////////  
+    // check for cam or video input
+    CommandLineParser parser(argc, argv, keys);
+    if (parser.has("help"))
+    {
+      parser.printMessage();
+      return 0;
+    }
+    
+    int camera = parser.get<int>("camera");
+    string file = parser.get<string>("video");
+    bool disp = parser.get<bool>("display");
+    string xml = parser.get<string>("xml");
+    bool hog = parser.get<bool>("hog");
+    float focal = parser.get<float>("focal");
+    string out_file = parser.get<string>("store");
+    
+    
+    if (!parser.check())
+    {
+      parser.printErrors();
+      return 1;
+    }
+    
+    // check video file or cam
+    if (file.empty())
+    {
+      input.open(camera);
+      //cap.set(CAP_PROP_FRAME_WIDTH, WIDTH);
+      //cap.set(CAP_PROP_FRAME_HEIGHT, HEIGHT);
+    }
+    else
+    {
+      file = samples::findFileOrKeep(file);
+      input.open(file);
+    
+    }
+    
+    // confirm input can be opened
+    if (!input.isOpened())
+    {
+      cout << "Can not open video stream: '" << (file.empty() ? "<camera>" : file) << "'" << endl;
+      return 2;
+    }
+    
+    // load xml
+    if(hog){
+      if(!stop_hog.load(xml)){
+        cout << "\nERROR: failed to load xml file\n" << endl;
+        exit(SYSTEM_ERROR);
+      }
+    }
+    else{
+      if(!stop_cascade.load(xml)){
+        cout << "\nERROR: failed to load xml file\n" << endl;
+        exit(SYSTEM_ERROR);
+      }
+    }
+  
+  //////////////////// get input propeties ////////////  
+    // find properties of input
+    in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT)); //height and width of video 
+    total_frames = input.get(CAP_PROP_FRAME_COUNT); // frame count
+
+    cout << "total frames: " << total_frames << endl;
+  
+  //////////////////// create output file if necessary ////////////  
+    // create output file if input given
+    if(!out_file.empty()){
+      in_fps = input.get(CAP_PROP_FPS);
+      fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
+      // output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
+      OUT_WRITE = true;
+      desired_size = in_size;
+
+    }
+  
+  //////////////////// create display windows ////////////  
+    if(disp){
+      namedWindow("original",WINDOW_NORMAL);
+      namedWindow("grayscale",WINDOW_NORMAL);
+    }
+    namedWindow(final_out,WINDOW_NORMAL);
+
+  
+  //////////////////// ROI calculation ////////////  
+
+    // DETECTION ROI
+    Rect lane_roi(0 + lane_roi_width_offset,                  // x starting point
+                  in_size.height/2 + lane_roi_top_offset,      // y start
+                  in_size.width - lane_roi_width_offset,       // width
+                  in_size.height/2 - lane_roi_bottom_offset);  // height
+                  
+    Rect stop_roi(in_size.width/2 + stop_roi_left_offset,         // x starting point
+                  0 + stop_roi_top_offset,                      // y starting point
+                  in_size.width/2 - stop_roi_left_offset,        // width
+                  in_size.height/2 - stop_roi_bottom_offset);   // height
+                  
+    
+    // DISPLAY TOGGLES
+    // bool DISP_LINES = false;
+    // bool DISP_STOP = false;
+    
+    //int TPR = 0;
+    //int FPR = 0;
+
+  
+  ///////////////////////////////// initialize mutex /////////////////////////////////    
+  
+    // cpu_set_t cpuset;
+    // int core_id;
+    // int max_prio, rc;
+    
+    // rc = pthread_mutex_init(&time_mutex,NULL);
+    // if(rc != 0){
+
+    //     syslog(LOG_ERR, "ERROR: could not succesfully initialize mutex, error number: %d", rc);
+    //     return SYSTEM_ERROR;
+
+    // }
+
+    rc = pthread_mutex_init(&timerParams.timer_mutex,NULL);
+    if(rc != 0){
+
+        syslog(LOG_ERR, "ERROR: could not succesfully initialize timer mutex, error number: %d", rc);
+        return SYSTEM_ERROR;
+
+    }
+
+    rc = pthread_mutex_init(&proc_frame_mutex,NULL);
+    if(rc != 0){
+
+        syslog(LOG_ERR, "ERROR: could not succesfully initialize processing frame mutex, error number: %d", rc);
+        return SYSTEM_ERROR;
+
+    }
+
+    rc = pthread_mutex_init(&disp_frame_mutex,NULL);
+    if(rc != 0){
+
+        syslog(LOG_ERR, "ERROR: could not succesfully initialize display frame mutex, error number: %d", rc);
+        return SYSTEM_ERROR;
+
+    }
+
+  ///////////////////////////////// initialize and create other threads ///////////////////////////////// 
+    // initialize linked list
+    TAILQ_INIT(&frame_list);
+    // struct timespec start_60S,start_1S, end_frame;
+    // dispParams.total_frames = total_frames;
+    dispParams.done = &done;
+    // dispParams.output_vid = output_vid;
+    dispParams.save_to_video = OUT_WRITE;
+    dispParams.in_fps = in_fps;
+    dispParams.fourcc_code_out = fourcc_code_out;
+    dispParams.des_size = desired_size;
+    dispParams.out_file = out_file;
+    dispParams.disp_frame_cnt = &disp_frame_cnt;
+    dispParams.disp_frame_mutex = &disp_frame_mutex;
+    pthread_create(&disp_thread_ID,   // pointer to thread descriptor
+                    NULL,     // use default attributes
+                    frame_disp_thread, // thread function entry point
+                    (void *)(&dispParams) // parameters to pass in
+                    );
+
+    timerParams.disp_frame_cnt = &disp_frame_cnt;
+    timerParams.proc_frame_cnt = &proc_frame_cnt;
+
+    timerParams.disp_frame_mutex = &disp_frame_mutex;
+    timerParams.proc_frame_mutex = &proc_frame_mutex;                
+  
+  ///////////////////////////////// begin frame processing and timer ///////////////////////////////// 
+    syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
+
+    Mat frame, frame_gray;
+
+    // start time for 1 minute comparison
+    clock_gettime(CLOCK_MONOTONIC, &start_60S);
+    
+    // start time for frame
+    clock_gettime(CLOCK_MONOTONIC, &start_1S);
+
+    clock_gettime(clock_id, &timer.it_value);
+    
+    timer.it_value.tv_sec++;
+
+    if(timer_settime(timerid, TIMER_ABSTIME, &timer, NULL) != 0){
+      cout << "ERROR: Could not set timer: " << strerror(errno);
       exit(SYSTEM_ERROR);
     }
 
-    // cout << "setting frame params" << endl;
-
-    frameParams->frame = frame.clone();
-    frameParams->frame_gray = frame_gray.clone();
-    
-    // threadParams.lane_frame = frame_gray(lane_roi);
-    
-    frameParams->lane_roi = lane_roi;
-    
-    frameParams->in_size = in_size;
-    frameParams->des_size = desired_size;
-
-
-    /////////////////////////// thread stuff for stop detection /////////////////////////////////  
-    
-    // threadParams.stop_frame = frame_gray(stop_roi);
-    
-    frameParams->stop_roi = stop_roi;
-    
-    //threadParams[STOP_DETECT].in_size = in_size;
-    
-    frameParams->focal = focal;
-    
-    frameParams->disp = disp;
-    frameParams->hog = hog;
-    frameParams->complete = false;
-    
-    // cout << "thread params set" << endl;
-
-    pthread_create(&frameParams->thread_ID,   // pointer to thread descriptor
-                   NULL,     // use default attributes
-                   frame_proc_thread, // thread function entry point
-                   (void *)(frameParams) // parameters to pass in
-                  );
-
-    // cout << "created frame thread with ID: " << frameParams->thread_ID << endl;
-
-    TAILQ_INSERT_TAIL(&frame_list, frameParams,next_frame);
-
-    // frameParams_t *frameParams_check = TAILQ_FIRST(&frame_list);
-
-    // cout << "ID from list: " << frameParams_check->thread_ID << endl;
-
-    ///////////////////////////////////////////////////////////////////////////////////////////////    
-
-    // join and wait for all threads to finish
-    // pthread_join(frameParams->thread_ID, NULL); //THIS ONE
-
-    ///////////////////////////// display results from detection ///////////////////////////////// 
-
-    // if(frameParams->complete) //THIS ONE
-    //   imshow(final_out,frameParams->frame); //THIS ONE
-
-    // TAILQ_REMOVE(&frame_list, frameParams, next_frame); //THIS ONE
-
-    // if(TAILQ_EMPTY(&frame_list))
-    //   cout << "this list EMPTY" << endl;
-
-    // delete frameParams; //THIS ONE
-    
-    // frame_cnt++;
+    while(!done){
+    //for(int i=0; i<NUM_FEAT; i++)
+    //{
     
     
-    //if(threadParams[STOP_DETECT].stop_signs.size()){
+        // read in frame
+      if(!input.read(frame)){
+        cout << "all frames have finished processing, displaying remaining frames" << endl;
+        //while(1){
+        //  if((winInput = waitKey(0)) == ESCAPE_KEY){ 
+        //    break;
+        //  }
+        //}
+        // waitKey(0);
+        done = true;
+        break;
+      } 
       
-    //  winInput = waitKey(0);
+      if(disp)
+        imshow("original", frame);
       
-    //  if (winInput == 'y' ){
-    //    TPR++;
-    //  }
-    //  else if(winInput == 'n' ){
-    //    FPR++;
-    //  }
-    //}
-    
-    // write to output file
-    // if(OUT_WRITE){
-    //   // output_vid.write(frame);
-    //   cout << "out write is true" << endl;
-    // }
-    
-    
-    //////////////////////////////////////////////////////////////////////////////////////////////  
+      // grayscale and blur
+      cvtColor( frame, frame_gray, COLOR_BGR2GRAY );
+      GaussianBlur(frame_gray, frame_gray, Size(9,9), 2, 2);
 
-    // if ((winInput = waitKey(1)) == ESCAPE_KEY)
-    // //if ((winInput = waitKey(0)) == ESCAPE_KEY)
-    // {
-    //     break;
-    // }
-    // else if(winInput == 'L' || winInput == 'l'){
-    //   DISP_LINES ^= 1;
-    //   cout << "lines toggled: " << (DISP_LINES ? "on" : "off") << endl;
-    // }
-    // else if(winInput == 'S' || winInput == 's'){
-    //   DISP_STOP ^= 1;
-    //   cout << "stop signs toggled: " << (DISP_STOP ? "on" : "off") << endl;
-    // }
-    // else if(winInput == 32){
-    //   cout << "video stopped, press any key to resume" << endl;
-    //   waitKey();
-    // }
-  }
-  
-  cout << "exited main loop" << endl;
-  pthread_join(disp_thread_ID, NULL);
-  
-  cout << "joined disp_thread" << endl;
-  //cout << "true positive: " << TPR << endl;
-  //cout << "false positive: " << FPR << endl;
-  //cout << "total detects: " << (TPR + FPR) << endl;
-    return 0;
+      if(disp)
+        imshow("grayscale", frame_gray );
+      
+      
+      //////////////////////////// initialize frame processing thread parameters per frame /////////////////////////////////    
+      frameParams_t *frameParams = new frameParams_t;
+      // threadParams->frameIdx = LANE_DETECT;
+
+      if(frameParams == NULL){
+        cout << "unable to malloc memory for frame params" << endl;
+        exit(SYSTEM_ERROR);
+      }
+
+      // cout << "setting frame params" << endl;
+
+      frameParams->frame = frame.clone();
+      frameParams->frame_gray = frame_gray.clone();
+
+      frameParams->in_size = in_size;
+      frameParams->des_size = desired_size;
+
+      frameParams->proc_frame_cnt = &proc_frame_cnt;
+      frameParams->proc_frame_mutex = &proc_frame_mutex;
+      
+      // threadParams.lane_frame = frame_gray(lane_roi);
+      
+      frameParams->lane_roi = lane_roi;
+
+      /////////////////////////// thread stuff for stop detection /////////////////////////////////  
+      
+      // threadParams.stop_frame = frame_gray(stop_roi);
+      
+      frameParams->stop_roi = stop_roi;
+      
+      //threadParams[STOP_DETECT].in_size = in_size;
+      
+      frameParams->focal = focal;
+      
+      frameParams->disp = disp;
+      frameParams->hog = hog;
+      frameParams->complete = false;
+      
+      // cout << "thread params set" << endl;
+
+      pthread_create(&frameParams->thread_ID,   // pointer to thread descriptor
+                    NULL,     // use default attributes
+                    frame_proc_thread, // thread function entry point
+                    (void *)(frameParams) // parameters to pass in
+                    );
+
+      // cout << "created frame thread with ID: " << frameParams->thread_ID << endl;
+
+      TAILQ_INSERT_TAIL(&frame_list, frameParams,next_frame);
+
+      
+    }
+    
+    cout << "exited main loop" << endl;
+    pthread_join(disp_thread_ID, NULL);
+
+    if(timer_delete(timerid) != 0) {
+      cout << "ERROR: could not delete timer: " << strerror(errno) << endl;
+    }    
+    cout << "joined disp_thread" << endl;
+    //cout << "true positive: " << TPR << endl;
+    //cout << "false positive: " << FPR << endl;
+    //cout << "total detects: " << (TPR + FPR) << endl;
+      return 0;
 }
