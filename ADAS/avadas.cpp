@@ -722,8 +722,8 @@ void *frame_disp_thread(void *display_Params){
   if(dispParams->save_to_video)
     output_vid.open(dispParams->out_file, dispParams->fourcc_code_out, dispParams->in_fps, dispParams->des_size,true);
 
-  // while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
-  while((!*dispParams->done)){
+  while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
+  // while((!*dispParams->done)){
 
     // if(TAILQ_EMPTY(&frame_list))
     //       cout << "this list EMPTY" << endl;
@@ -759,8 +759,6 @@ void *frame_disp_thread(void *display_Params){
         rc = pthread_mutex_lock(dispParams->disp_frame_mutex);
         if(rc != 0){
             syslog(LOG_ERR,"ERRROR display thread: display mutex lock function failed: %s",strerror(rc));
-            // cleanup(false,0,0,local_w_file_fd);
-            // raise(SIGINT);
             exit(SYSTEM_ERROR);
         }
 
@@ -769,8 +767,6 @@ void *frame_disp_thread(void *display_Params){
         rc = pthread_mutex_unlock(dispParams->disp_frame_mutex);
         if(rc != 0){
             syslog(LOG_ERR,"ERRROR display thread: display mutex unlock function failed: %s",strerror(rc));
-            // cleanup(false,0,0,local_w_file_fd);
-            // raise(SIGINT);
             exit(SYSTEM_ERROR);
         }
 
@@ -790,7 +786,7 @@ void *frame_disp_thread(void *display_Params){
       {
         *dispParams->done = true;
         cout << "ESC pressed, terminating program" << endl;
-          // break;
+        break;
       }
       else if(winInput == 'L' || winInput == 'l'){
         DISP_LINES ^= 1;
@@ -1097,6 +1093,8 @@ int main( int argc, char** argv )
         //}
         // waitKey(0);
         done = true;
+        // while(!done){}
+
         break;
       } 
       
@@ -1164,8 +1162,8 @@ int main( int argc, char** argv )
       
     }
     
-    cout << "cleaning up...." << endl;
     pthread_join(disp_thread_ID, NULL);
+    cout << "cleaning up...." << endl;
 
     if(timer_delete(timerid) != 0) {
       cout << "ERROR: could not delete timer: " << strerror(errno) << endl;
