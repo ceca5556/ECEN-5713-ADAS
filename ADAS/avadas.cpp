@@ -590,14 +590,24 @@ void *frame_proc_thread(void *frame_thread_params){
 
 
 
+
   frameParams_t *frameParams = (frameParams_t *)frame_thread_params;
 
 
   stopParams_t stopParams;
   laneParams_t laneParams;
 
-  int rc= 0;
   struct timespec end_frame;
+  int rc= 0;
+
+  // rc = pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+  // if(!rc){
+  //   syslog(LOG_ERR, "ERROR thread ID: %ld: unable to enable cancel on thread ID: %s", frameParams->thread_ID, strerror(rc));
+  // }
+  // rc = pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
+  // if(!rc){
+  //   syslog(LOG_ERR, "ERROR thread ID: %ld: unable to set async cancel on thread ID: %s", frameParams->thread_ID, strerror(rc));
+  // }
   
   laneParams.lane_frame = frameParams->frame_gray(frameParams->lane_roi);    
   laneParams.lane_roi = frameParams->lane_roi;  
@@ -712,8 +722,8 @@ void *frame_disp_thread(void *display_Params){
   if(dispParams->save_to_video)
     output_vid.open(dispParams->out_file, dispParams->fourcc_code_out, dispParams->in_fps, dispParams->des_size,true);
 
-  while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
-  // while((!*dispParams->done)){
+  // while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
+  while((!*dispParams->done)){
 
     // if(TAILQ_EMPTY(&frame_list))
     //       cout << "this list EMPTY" << endl;
@@ -770,7 +780,7 @@ void *frame_disp_thread(void *display_Params){
       }
     }
       
-    if(!(current_frames % 100) && dispParams->save_to_video)
+    if(!(current_frames % 500) && dispParams->save_to_video)
       cout << current_frames << "displayed" << endl;
 
     //////////////////////////////////////////////////////////////////////////////////////////////  
@@ -779,6 +789,7 @@ void *frame_disp_thread(void *display_Params){
       //if ((winInput = waitKey(0)) == ESCAPE_KEY)
       {
         *dispParams->done = true;
+        cout << "ESC pressed, terminating program" << endl;
           // break;
       }
       else if(winInput == 'L' || winInput == 'l'){
@@ -931,23 +942,31 @@ int main( int argc, char** argv )
       }
     }
   
-  //////////////////// get input propeties ////////////  
-    // find properties of input
-    in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT)); //height and width of video 
-    total_frames = input.get(CAP_PROP_FRAME_COUNT); // frame count
 
-    cout << "total frames: " << total_frames << endl;
-  
   //////////////////// create output file if necessary ////////////  
     // create output file if input given
     if(!out_file.empty()){
-      in_fps = input.get(CAP_PROP_FPS);
       fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
       // output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
       OUT_WRITE = true;
       desired_size = in_size;
 
     }
+
+  //////////////////// get input propeties ////////////  
+    // find properties of input
+    in_fps = input.get(CAP_PROP_FPS);
+    in_size = Size( (int)input.get(CAP_PROP_FRAME_WIDTH), (int)input.get(CAP_PROP_FRAME_HEIGHT)); //height and width of video 
+    total_frames = input.get(CAP_PROP_FRAME_COUNT); // frame count
+
+    cout << endl << "************** properties **************" << endl; 
+    cout << "total frames: " << total_frames << endl;
+    cout << "input fps: " << in_fps << endl;
+    cout << "input size: " << in_size << endl;
+    cout << "output size: "<< desired_size << endl << endl;
+
+
+
   
   //////////////////// create display windows ////////////  
     if(disp){
@@ -1145,13 +1164,41 @@ int main( int argc, char** argv )
       
     }
     
-    cout << "exited main loop" << endl;
+    cout << "cleaning up...." << endl;
     pthread_join(disp_thread_ID, NULL);
 
     if(timer_delete(timerid) != 0) {
       cout << "ERROR: could not delete timer: " << strerror(errno) << endl;
     }    
-    cout << "joined disp_thread" << endl;
+    // cout << "joined disp_thread" << endl;
+
+    if(!TAILQ_EMPTY(&frame_list))
+      cout << "finishing remaining frame processing threads..." << endl;
+
+    while(!TAILQ_EMPTY(&frame_list)){
+      frameParams_t *frameParams = TAILQ_FIRST(&frame_list);
+
+      if(frameParams != NULL){
+        // cout << "attempting to cancel thread ID: " << frameParams->thread_ID << endl;
+        // rc = pthread_cancel(frameParams->thread_ID);
+        // if(!rc){
+        //   cout << "failed to cancel thread id" <<  frameParams->thread_ID << endl;
+        // }
+        pthread_join(frameParams->thread_ID, NULL);
+
+        // cout << "thread ID: " << frameParams->thread_ID << " cancelled" << endl;
+
+        TAILQ_REMOVE(&frame_list, frameParams, next_frame);
+
+        delete frameParams;
+      }
+
+    }
+
+    // input.release();
+    destroyAllWindows();
+
+    cout << "end of application" << endl;
     //cout << "true positive: " << TPR << endl;
     //cout << "false positive: " << FPR << endl;
     //cout << "total detects: " << (TPR + FPR) << endl;
