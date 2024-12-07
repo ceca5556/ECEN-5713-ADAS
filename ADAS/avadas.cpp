@@ -192,8 +192,11 @@ static float sensor_width = 4.55; // milimeters
 struct timespec start_60S,start_1S;
 pthread_mutex_t time_mutex;
 
-// int proc_frame_num;
-// int disp_frame_num;
+int proc_frame_num;
+int disp_frame_num;
+
+int type_proc = 1;
+int type_disp = 2;
 
 
 /**************************************************************
@@ -220,132 +223,153 @@ pthread_mutex_t time_mutex;
 *
 ***************************************************************/
 // static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop,int *frame_num){
-// static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S, struct timespec *stop){
-  
-//   static int fps_sum;
-//   static int call_count;
-//   static int frame_num;
-
-//   // int rc= 0;
-//   int full_time = stop->tv_sec - start_60S->tv_sec;
-//   int frme_time = stop->tv_sec - start_1S->tv_sec;
-
-//   frame_num++;
-
-//   if(frme_time >= SECOND){ // after 1 second
-//     syslog(LOG_NOTICE, "FPS: %d frames in %d second", frame_num, frme_time);
-//     fps_sum += frame_num;
-//     call_count++;
-//     frame_num = 0;
-//     clock_gettime(CLOCK_MONOTONIC, start_1S);
-//   }
-  
-//   // show when 60 seconds have passed
-//   if(full_time >= MINUTE){
-//     int fps_avg = fps_sum/call_count;
-//     syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg FPS **********************", full_time,fps_avg);
-//     fps_sum = 0;
-//     call_count = 0;
-//     clock_gettime(CLOCK_MONOTONIC, start_60S);
-//   }
-
-// }
-
-static void frame_time_calc_thread(union sigval sigval){
+static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S, struct timespec *stop, int frame_type){
   
   // static int fps_sum;
-  // static int call_count;
+  static int proc_fps_sum;
+  static int disp_fps_sum;
+  static int call_count;
   // static int frame_num;
+  static int proc_frame;
+  static int disp_frame;
 
-  int rc= 0;
-  // int temp_call_count = 0;
-  int temp_proc_frames = 0;
-  int temp_disp_frames = 0;
-  // int temp_tot_proc = 0;
-  // int temp_tot_disp = 0;
+  // int rc= 0;
+  int full_time = stop->tv_sec - start_60S->tv_sec;
+  int frme_time = stop->tv_sec - start_1S->tv_sec;
 
-  // static int call_count;
-  // static int tot_proc;
-  // static int tot_disp;
-  // int full_time = stop->tv_sec - start_60S->tv_sec;
-  // int frme_time = stop->tv_sec - start_1S->tv_sec;
+  // frame_num++;
+  if(frame_type == type_proc){
+    proc_frame++;
+  }
+  else if(frame_type == type_disp){
+    disp_frame++;
+  }
 
-  timerParams_t *timerParams = (timerParams_t*) sigval.sival_ptr;
-
-  /////////////////////// lock /////////////////////
-    // lock timer
-    // rc = pthread_mutex_lock(&timerParams->timer_mutex);
-    // if(rc != 0){
-    //     syslog(LOG_ERR,"ERRROR fps calc thread: timer mutex lock function failed: %s",strerror(rc));
-    //     // cleanup(false,0,0,local_w_file_fd);
-    //     // raise(SIGINT);
-    //     exit(SYSTEM_ERROR);
-    // }
-    // lock proc frame
-    rc = pthread_mutex_lock(timerParams->proc_frame_mutex);
-    if(rc != 0){
-        syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
-        exit(SYSTEM_ERROR);
-    }
-    // lock disp frame
-    rc = pthread_mutex_lock(timerParams->disp_frame_mutex);
-    if(rc != 0){
-        syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
-        exit(SYSTEM_ERROR);
-    }
-
-  /////////////////////// perform needed operations /////////////////////
-  // timerParams->call_count++;
-  temp_proc_frames = *timerParams->proc_frame_cnt;
-  temp_disp_frames = *timerParams->disp_frame_cnt;
-
-  // tot_proc += temp_proc_frames;
-  // tot_disp += temp_disp_frames;
-
-  // temp_tot_disp = 
-
-  *timerParams->proc_frame_cnt = 0;
-  *timerParams->disp_frame_cnt = 0;
-  // cout << "timer thread called: " << timerParams->call_count << "times" << endl;
-
-  /////////////////////// unlock /////////////////////
-    //unlock disp
-    rc = pthread_mutex_unlock(timerParams->disp_frame_mutex);
-    if(rc != 0){
-        syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
-        exit(SYSTEM_ERROR);
-    }
-
-    // unlock proc
-    rc = pthread_mutex_unlock(timerParams->proc_frame_mutex);
-    if(rc != 0){
-        syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
-        exit(SYSTEM_ERROR);
-    }
-
-    // unlock timer
-    // rc = pthread_mutex_unlock(&timerParams->timer_mutex);
-    // if(rc != 0){
-    //     syslog(LOG_ERR,"ERRROR fps calc thread: mutex lock function failed: %s",strerror(rc));
-    //     // cleanup(false,0,0,local_w_file_fd);
-    //     // raise(SIGINT);
-    //     exit(SYSTEM_ERROR);
-    // }
-
-  /////////////////////// other calculations /////////////////////
-  syslog(LOG_NOTICE,"P-FPS (processing): %d frames in 1 second",temp_proc_frames);
-  syslog(LOG_NOTICE,"D-FPS (displaying): %d frames in 1 second",temp_disp_frames);
-
+  if(frme_time >= SECOND){ // after 1 second
+    // syslog(LOG_NOTICE, "FPS: %d frames in %d second", frame_num, frme_time);
+    syslog(LOG_NOTICE, "P-FPS: %d frames in %d second", proc_frame, frme_time);
+    syslog(LOG_NOTICE, "D-FPS: %d frames in %d second", disp_frame, frme_time);
+    // fps_sum += frame_num;
+    proc_fps_sum += proc_frame;
+    disp_fps_sum += disp_frame;
+    call_count++;
+    // frame_num = 0;
+    proc_frame = 0;
+    disp_frame = 0;
+    clock_gettime(CLOCK_MONOTONIC, start_1S);
+  }
+  
+  // show when 60 seconds have passed
+  if(full_time >= MINUTE){
+    // int fps_avg = fps_sum/call_count;
+    int proc_fps_avg = proc_fps_sum/call_count;
+    int disp_fps_avg = disp_fps_sum/call_count;
+    // syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg FPS **********************", full_time,fps_avg);
+    syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg P-FPS (processing) / %d avg D-FPS (displaying) **********************", full_time,proc_fps_avg,disp_fps_avg);
+    // fps_sum = 0;
+    proc_fps_sum = 0;
+    disp_fps_sum = 0;
+    call_count = 0;
+    clock_gettime(CLOCK_MONOTONIC, start_60S);
+  }
 
 }
+
+// static void frame_time_calc_thread(union sigval sigval){
+  
+//   // static int fps_sum;
+//   // static int call_count;
+//   // static int frame_num;
+
+//   int rc= 0;
+//   // int temp_call_count = 0;
+//   int temp_proc_frames = 0;
+//   int temp_disp_frames = 0;
+//   // int temp_tot_proc = 0;
+//   // int temp_tot_disp = 0;
+
+//   // static int call_count;
+//   // static int tot_proc;
+//   // static int tot_disp;
+//   // int full_time = stop->tv_sec - start_60S->tv_sec;
+//   // int frme_time = stop->tv_sec - start_1S->tv_sec;
+
+//   timerParams_t *timerParams = (timerParams_t*) sigval.sival_ptr;
+
+//   /////////////////////// lock /////////////////////
+//     // lock timer
+//     // rc = pthread_mutex_lock(&timerParams->timer_mutex);
+//     // if(rc != 0){
+//     //     syslog(LOG_ERR,"ERRROR fps calc thread: timer mutex lock function failed: %s",strerror(rc));
+//     //     // cleanup(false,0,0,local_w_file_fd);
+//     //     // raise(SIGINT);
+//     //     exit(SYSTEM_ERROR);
+//     // }
+//     // lock proc frame
+//     rc = pthread_mutex_lock(timerParams->proc_frame_mutex);
+//     if(rc != 0){
+//         syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
+//         // cleanup(false,0,0,local_w_file_fd);
+//         // raise(SIGINT);
+//         exit(SYSTEM_ERROR);
+//     }
+//     // lock disp frame
+//     rc = pthread_mutex_lock(timerParams->disp_frame_mutex);
+//     if(rc != 0){
+//         syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
+//         // cleanup(false,0,0,local_w_file_fd);
+//         // raise(SIGINT);
+//         exit(SYSTEM_ERROR);
+//     }
+
+//   /////////////////////// perform needed operations /////////////////////
+//   // timerParams->call_count++;
+//   temp_proc_frames = *timerParams->proc_frame_cnt;
+//   temp_disp_frames = *timerParams->disp_frame_cnt;
+
+//   // tot_proc += temp_proc_frames;
+//   // tot_disp += temp_disp_frames;
+
+//   // temp_tot_disp = 
+
+//   *timerParams->proc_frame_cnt = 0;
+//   *timerParams->disp_frame_cnt = 0;
+//   // cout << "timer thread called: " << timerParams->call_count << "times" << endl;
+
+//   /////////////////////// unlock /////////////////////
+//     //unlock disp
+//     rc = pthread_mutex_unlock(timerParams->disp_frame_mutex);
+//     if(rc != 0){
+//         syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
+//         // cleanup(false,0,0,local_w_file_fd);
+//         // raise(SIGINT);
+//         exit(SYSTEM_ERROR);
+//     }
+
+//     // unlock proc
+//     rc = pthread_mutex_unlock(timerParams->proc_frame_mutex);
+//     if(rc != 0){
+//         syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
+//         // cleanup(false,0,0,local_w_file_fd);
+//         // raise(SIGINT);
+//         exit(SYSTEM_ERROR);
+//     }
+
+//     // unlock timer
+//     // rc = pthread_mutex_unlock(&timerParams->timer_mutex);
+//     // if(rc != 0){
+//     //     syslog(LOG_ERR,"ERRROR fps calc thread: mutex lock function failed: %s",strerror(rc));
+//     //     // cleanup(false,0,0,local_w_file_fd);
+//     //     // raise(SIGINT);
+//     //     exit(SYSTEM_ERROR);
+//     // }
+
+//   /////////////////////// other calculations /////////////////////
+//   syslog(LOG_NOTICE,"P-FPS (processing): %d frames in 1 second",temp_proc_frames);
+//   syslog(LOG_NOTICE,"D-FPS (displaying): %d frames in 1 second",temp_disp_frames);
+
+
+// }
 
 // static void *frame_time_calc_1S(void){
 
@@ -675,7 +699,8 @@ void *frame_proc_thread(void *frame_thread_params){
   clock_gettime(CLOCK_MONOTONIC, &end_frame);
 
   // call mutex lock -> lock frame time calculation for each frame
-  rc = pthread_mutex_lock(frameParams->proc_frame_mutex);
+  rc = pthread_mutex_lock(&time_mutex);
+  // rc = pthread_mutex_lock(frameParams->proc_frame_mutex);
   if(rc != 0){
       syslog(LOG_ERR,"ERRROR fps calculation: mutex lock function failed: %s",strerror(rc));
       // cleanup(false,0,0,local_w_file_fd);
@@ -683,10 +708,11 @@ void *frame_proc_thread(void *frame_thread_params){
       exit(SYSTEM_ERROR);
   }
 
-  // frame_time_calc(&start_60S,&start_1S,&end_frame);
-  *frameParams->proc_frame_cnt = *frameParams->proc_frame_cnt + 1;
+  frame_time_calc(&start_60S,&start_1S,&end_frame,type_proc);
+  // *frameParams->proc_frame_cnt = *frameParams->proc_frame_cnt + 1;
 
-  rc = pthread_mutex_unlock(frameParams->proc_frame_mutex);
+  rc = pthread_mutex_unlock(&time_mutex);
+  // rc = pthread_mutex_unlock(frameParams->proc_frame_mutex);
   if(rc != 0){
       syslog(LOG_ERR,"ERRROR fps calculation: mutex unlock function failed: %s",strerror(rc));
       // cleanup(false,0,0,local_w_file_fd);
@@ -715,6 +741,7 @@ void *frame_disp_thread(void *display_Params){
   int rc = 0;
 
   displayParams_t *dispParams = (displayParams_t*)display_Params;
+  struct timespec end_frame;
   uint16_t current_frames = 0;
 
   VideoWriter  output_vid;
@@ -756,17 +783,41 @@ void *frame_disp_thread(void *display_Params){
 
         delete frameParams;
 
-        rc = pthread_mutex_lock(dispParams->disp_frame_mutex);
+        // rc = pthread_mutex_lock(dispParams->disp_frame_mutex);
+        // if(rc != 0){
+        //     syslog(LOG_ERR,"ERRROR display thread: display mutex lock function failed: %s",strerror(rc));
+        //     exit(SYSTEM_ERROR);
+        // }
+
+        // *dispParams->disp_frame_cnt = *dispParams->disp_frame_cnt +1;
+
+        // rc = pthread_mutex_unlock(dispParams->disp_frame_mutex);
+        // if(rc != 0){
+        //     syslog(LOG_ERR,"ERRROR display thread: display mutex unlock function failed: %s",strerror(rc));
+        //     exit(SYSTEM_ERROR);
+        // }
+
+        clock_gettime(CLOCK_MONOTONIC, &end_frame);
+
+        // call mutex lock -> lock frame time calculation for each frame
+        rc = pthread_mutex_lock(&time_mutex);
+        // rc = pthread_mutex_lock(frameParams->proc_frame_mutex);
         if(rc != 0){
-            syslog(LOG_ERR,"ERRROR display thread: display mutex lock function failed: %s",strerror(rc));
+            syslog(LOG_ERR,"ERRROR fps calculation: mutex lock function failed: %s",strerror(rc));
+            // cleanup(false,0,0,local_w_file_fd);
+            // raise(SIGINT);
             exit(SYSTEM_ERROR);
         }
 
-        *dispParams->disp_frame_cnt = *dispParams->disp_frame_cnt +1;
+        frame_time_calc(&start_60S,&start_1S,&end_frame,type_disp);
+        // *frameParams->proc_frame_cnt = *frameParams->proc_frame_cnt + 1;
 
-        rc = pthread_mutex_unlock(dispParams->disp_frame_mutex);
+        rc = pthread_mutex_unlock(&time_mutex);
+        // rc = pthread_mutex_unlock(frameParams->proc_frame_mutex);
         if(rc != 0){
-            syslog(LOG_ERR,"ERRROR display thread: display mutex unlock function failed: %s",strerror(rc));
+            syslog(LOG_ERR,"ERRROR fps calculation: mutex unlock function failed: %s",strerror(rc));
+            // cleanup(false,0,0,local_w_file_fd);
+            // raise(SIGINT);
             exit(SYSTEM_ERROR);
         }
 
@@ -825,16 +876,16 @@ int main( int argc, char** argv )
 
   int rc = 0; 
   //////////////////// declare timer variables /////////////
-    timerParams_t timerParams;
-    struct sigevent sev;
-    timer_t timerid;
-    int clock_id;
-    // struct timespec start_time;
-    struct itimerspec timer;
+    // timerParams_t timerParams;
+    // struct sigevent sev;
+    // timer_t timerid;
+    // int clock_id;
+    // // struct timespec start_time;
+    // struct itimerspec timer;
 
-    memset(&timerParams,0,sizeof(timerParams_t));
-    memset(&sev,0,sizeof(struct sigevent));
-    memset(&timer, 0, sizeof(struct itimerspec));
+    // memset(&timerParams,0,sizeof(timerParams_t));
+    // memset(&sev,0,sizeof(struct sigevent));
+    // memset(&timer, 0, sizeof(struct itimerspec));
 
   //////////////////// declare opencv variables ////////////  
     VideoCapture input;
@@ -864,19 +915,19 @@ int main( int argc, char** argv )
     /* the following code was based off of the example at:
         https://github.com/cu-ecen-aeld/aesd-lectures/blob/master/lecture9/timer_thread.c
     */
-    clock_id = CLOCK_MONOTONIC;
-    sev.sigev_notify = SIGEV_THREAD;
-    sev.sigev_value.sival_ptr = &timerParams;
-    sev.sigev_notify_function = frame_time_calc_thread;
+    // clock_id = CLOCK_MONOTONIC;
+    // sev.sigev_notify = SIGEV_THREAD;
+    // sev.sigev_value.sival_ptr = &timerParams;
+    // sev.sigev_notify_function = frame_time_calc_thread;
 
-    timer.it_interval.tv_sec = 1;
-    timer.it_interval.tv_nsec = 0;
+    // timer.it_interval.tv_sec = 1;
+    // timer.it_interval.tv_nsec = 0;
 
-    if ( timer_create(clock_id,&sev,&timerid) != 0 ) {
-      // printf("Error creating timer\n",errno,strerror(errno));
-      cout << "ERROR: could not create timer: " << strerror(errno) << endl;
-      exit(SYSTEM_ERROR);
-    } 
+    // if ( timer_create(clock_id,&sev,&timerid) != 0 ) {
+    //   // printf("Error creating timer\n",errno,strerror(errno));
+    //   cout << "ERROR: could not create timer: " << strerror(errno) << endl;
+    //   exit(SYSTEM_ERROR);
+    // } 
 
 
   //////////////////// check input arguments ////////////  
@@ -1000,37 +1051,37 @@ int main( int argc, char** argv )
     // int core_id;
     // int max_prio, rc;
     
-    // rc = pthread_mutex_init(&time_mutex,NULL);
+    rc = pthread_mutex_init(&time_mutex,NULL);
+    if(rc != 0){
+
+        syslog(LOG_ERR, "ERROR: could not succesfully initialize mutex, error number: %d", rc);
+        return SYSTEM_ERROR;
+
+    }
+
+    // rc = pthread_mutex_init(&timerParams.timer_mutex,NULL);
     // if(rc != 0){
 
-    //     syslog(LOG_ERR, "ERROR: could not succesfully initialize mutex, error number: %d", rc);
+    //     syslog(LOG_ERR, "ERROR: could not succesfully initialize timer mutex, error number: %d", rc);
     //     return SYSTEM_ERROR;
 
     // }
 
-    rc = pthread_mutex_init(&timerParams.timer_mutex,NULL);
-    if(rc != 0){
+    // rc = pthread_mutex_init(&proc_frame_mutex,NULL);
+    // if(rc != 0){
 
-        syslog(LOG_ERR, "ERROR: could not succesfully initialize timer mutex, error number: %d", rc);
-        return SYSTEM_ERROR;
+    //     syslog(LOG_ERR, "ERROR: could not succesfully initialize processing frame mutex, error number: %d", rc);
+    //     return SYSTEM_ERROR;
 
-    }
+    // }
 
-    rc = pthread_mutex_init(&proc_frame_mutex,NULL);
-    if(rc != 0){
+    // rc = pthread_mutex_init(&disp_frame_mutex,NULL);
+    // if(rc != 0){
 
-        syslog(LOG_ERR, "ERROR: could not succesfully initialize processing frame mutex, error number: %d", rc);
-        return SYSTEM_ERROR;
+    //     syslog(LOG_ERR, "ERROR: could not succesfully initialize display frame mutex, error number: %d", rc);
+    //     return SYSTEM_ERROR;
 
-    }
-
-    rc = pthread_mutex_init(&disp_frame_mutex,NULL);
-    if(rc != 0){
-
-        syslog(LOG_ERR, "ERROR: could not succesfully initialize display frame mutex, error number: %d", rc);
-        return SYSTEM_ERROR;
-
-    }
+    // }
 
   ///////////////////////////////// initialize and create other threads ///////////////////////////////// 
     // initialize linked list
@@ -1052,11 +1103,11 @@ int main( int argc, char** argv )
                     (void *)(&dispParams) // parameters to pass in
                     );
 
-    timerParams.disp_frame_cnt = &disp_frame_cnt;
-    timerParams.proc_frame_cnt = &proc_frame_cnt;
+    // timerParams.disp_frame_cnt = &disp_frame_cnt;
+    // timerParams.proc_frame_cnt = &proc_frame_cnt;
 
-    timerParams.disp_frame_mutex = &disp_frame_mutex;
-    timerParams.proc_frame_mutex = &proc_frame_mutex;                
+    // timerParams.disp_frame_mutex = &disp_frame_mutex;
+    // timerParams.proc_frame_mutex = &proc_frame_mutex;                
   
   ///////////////////////////////// begin frame processing and timer ///////////////////////////////// 
     syslog(LOG_NOTICE, "general: ********************************* APPLICATION START ****************************");
@@ -1069,14 +1120,14 @@ int main( int argc, char** argv )
     // start time for frame
     clock_gettime(CLOCK_MONOTONIC, &start_1S);
 
-    clock_gettime(clock_id, &timer.it_value);
+    // clock_gettime(clock_id, &timer.it_value);
     
-    timer.it_value.tv_sec++;
+    // timer.it_value.tv_sec++;
 
-    if(timer_settime(timerid, TIMER_ABSTIME, &timer, NULL) != 0){
-      cout << "ERROR: Could not set timer: " << strerror(errno);
-      exit(SYSTEM_ERROR);
-    }
+    // if(timer_settime(timerid, TIMER_ABSTIME, &timer, NULL) != 0){
+    //   cout << "ERROR: Could not set timer: " << strerror(errno);
+    //   exit(SYSTEM_ERROR);
+    // }
 
     while(!done){
     //for(int i=0; i<NUM_FEAT; i++)
@@ -1165,9 +1216,9 @@ int main( int argc, char** argv )
     pthread_join(disp_thread_ID, NULL);
     cout << "cleaning up...." << endl;
 
-    if(timer_delete(timerid) != 0) {
-      cout << "ERROR: could not delete timer: " << strerror(errno) << endl;
-    }    
+    // if(timer_delete(timerid) != 0) {
+    //   cout << "ERROR: could not delete timer: " << strerror(errno) << endl;
+    // }    
     // cout << "joined disp_thread" << endl;
 
     if(!TAILQ_EMPTY(&frame_list))
