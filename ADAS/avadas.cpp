@@ -29,7 +29,6 @@
 #include "queue.h"
 
 using namespace cv; using namespace std;
-// double alpha=1.0;  int beta=10;  /* contrast and brightness control */
 
 
 #define ESCAPE_KEY (27)
@@ -47,6 +46,8 @@ using namespace cv; using namespace std;
 #define SECOND   (1)
 #define MINUTE   (60)
 
+#define THREAD_LIMIT  (500)
+// #define MEMORY_FIX
 
 typedef struct frameParams_s
 {
@@ -148,17 +149,11 @@ const int ratio_canny = 4;
 const int kernel_size = 3;
 
 
-int numberOfProcessors = NUM_CPUS;
+// int numberOfProcessors = NUM_CPUS;
 
-
-// pthread_t threads[NUM_FEAT];
-//threadParams_lane_t laneParams;
-// threadParams_t threadParams[NUM_FEAT];
-// frameParams_t threadParams;
 pthread_attr_t sched_attr;
 struct sched_param sched_param;
 
-// Mat orig_frame;
 char winInput;
 
 bool DISP_LINES = true;
@@ -166,8 +161,6 @@ bool DISP_STOP = true;
 
 
 const string final_out = "output";
-
-// Size in_size;
 
 int lane_roi_top_offset = 125;
 int lane_roi_bottom_offset = 375;
@@ -182,144 +175,38 @@ int stop_roi_bottom_offset = 50;
 int stop_roi_left_offset = 50;
 int stop_roi_right_offset = 0;
 
-// static int fps_sum = 0;
-// static int call_count = 0;
-// static int frame_num = 0;
+
 static float sensor_width = 4.55; // milimeters
 
-// Mat global_frame;
-// bool global_check = false;
-
-struct timespec start_60S,start_1S;
-// pthread_mutex_t time_mutex;
-
-// int proc_frame_num;
-// int disp_frame_num;
-
-// int type_proc = 1;
-// int type_disp = 2;
+#ifdef MEMORY_FIX
+int frames_in_list = 0;
+pthread_mutex_t list_num_mutex;
+#endif
 
 
-/**************************************************************
-*
-*  @brief dt_sec: calculates the difference between two timespec
-*         structs in seconds
-*
-*  @param[in] start_60S
-*        - pointer to starting timespec struct (used for 60 sec calculation)
-*
-*  @param[in] start_1S
-*      - pointer to starting timespec struct of the frame
-*
-*
-*  @param[in] stop
-*        - pointer to stopping timespec struct of the frame
-*
-*
-*  @param[in] frame_num
-*        - pointer to number of frames
-*
-*  @returns none
-*
-*
-***************************************************************/
-// static void frame_time_calc(struct timespec *start,struct timespec *start_frame, struct timespec *stop,int *frame_num){
-// static void frame_time_calc(struct timespec *start_60S,struct timespec *start_1S, struct timespec *stop, int frame_type){
-  
-//   // static int fps_sum;
-//   static int proc_fps_sum;
-//   static int disp_fps_sum;
-//   static int call_count;
-//   // static int frame_num;
-//   static int proc_frame;
-//   static int disp_frame;
-
-//   // int rc= 0;
-//   int full_time = stop->tv_sec - start_60S->tv_sec;
-//   int frme_time = stop->tv_sec - start_1S->tv_sec;
-
-//   // frame_num++;
-//   if(frame_type == type_proc){
-//     proc_frame++;
-//   }
-//   else if(frame_type == type_disp){
-//     disp_frame++;
-//   }
-
-//   if(frme_time >= SECOND){ // after 1 second
-//     // syslog(LOG_NOTICE, "FPS: %d frames in %d second", frame_num, frme_time);
-//     syslog(LOG_NOTICE, "P-FPS: %d frames in %d second", proc_frame, frme_time);
-//     syslog(LOG_NOTICE, "D-FPS: %d frames in %d second", disp_frame, frme_time);
-//     // fps_sum += frame_num;
-//     proc_fps_sum += proc_frame;
-//     disp_fps_sum += disp_frame;
-//     call_count++;
-//     // frame_num = 0;
-//     proc_frame = 0;
-//     disp_frame = 0;
-//     clock_gettime(CLOCK_MONOTONIC, start_1S);
-//   }
-  
-//   // show when 60 seconds have passed
-//   if(full_time >= MINUTE){
-//     // int fps_avg = fps_sum/call_count;
-//     int proc_fps_avg = proc_fps_sum/call_count;
-//     int disp_fps_avg = disp_fps_sum/call_count;
-//     // syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg FPS **********************", full_time,fps_avg);
-//     syslog(LOG_NOTICE, "FPS: **************************** %d seconds have passed / %d avg P-FPS (processing) / %d avg D-FPS (displaying) **********************", full_time,proc_fps_avg,disp_fps_avg);
-//     // fps_sum = 0;
-//     proc_fps_sum = 0;
-//     disp_fps_sum = 0;
-//     call_count = 0;
-//     clock_gettime(CLOCK_MONOTONIC, start_60S);
-//   }
-
-// }
-
+/* 
+   Timer thread signal function, resets 
+*/
 static void frame_time_calc_thread(union sigval sigval){
-  
-  // static int fps_sum;
-  // static int call_count;
-  // static int frame_num;
 
   int rc= 0;
-  // int temp_call_count = 0;
   int temp_proc_frames = 0;
   int temp_disp_frames = 0;
-  // int temp_tot_proc = 0;
-  // int temp_tot_disp = 0;
 
-  // static int call_count;
-  // static int tot_proc;
-  // static int tot_disp;
-  // int full_time = stop->tv_sec - start_60S->tv_sec;
-  // int frme_time = stop->tv_sec - start_1S->tv_sec;
 
   timerParams_t *timerParams = (timerParams_t*) sigval.sival_ptr;
 
   /////////////////////// lock /////////////////////
-    // lock timer
-    // rc = pthread_mutex_lock(&timerParams->timer_mutex);
-    // if(rc != 0){
-    //     syslog(LOG_ERR,"ERRROR fps calc thread: timer mutex lock function failed: %s",strerror(rc));
-    //     // cleanup(false,0,0,local_w_file_fd);
-    //     // raise(SIGINT);
-    //     exit(SYSTEM_ERROR);
-    // }
     // lock proc frame
     rc = pthread_mutex_lock(timerParams->proc_frame_mutex);
     if(rc != 0){
         syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
         exit(SYSTEM_ERROR);
     }
     // lock disp frame
     rc = pthread_mutex_lock(timerParams->disp_frame_mutex);
     if(rc != 0){
         syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
         exit(SYSTEM_ERROR);
     }
 
@@ -327,11 +214,6 @@ static void frame_time_calc_thread(union sigval sigval){
   // timerParams->call_count++;
   temp_proc_frames = *timerParams->proc_frame_cnt;
   temp_disp_frames = *timerParams->disp_frame_cnt;
-
-  // tot_proc += temp_proc_frames;
-  // tot_disp += temp_disp_frames;
-
-  // temp_tot_disp = 
 
   *timerParams->proc_frame_cnt = 0;
   *timerParams->disp_frame_cnt = 0;
@@ -342,8 +224,6 @@ static void frame_time_calc_thread(union sigval sigval){
     rc = pthread_mutex_unlock(timerParams->disp_frame_mutex);
     if(rc != 0){
         syslog(LOG_ERR,"ERRROR fps calc thread: display mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
         exit(SYSTEM_ERROR);
     }
 
@@ -351,19 +231,8 @@ static void frame_time_calc_thread(union sigval sigval){
     rc = pthread_mutex_unlock(timerParams->proc_frame_mutex);
     if(rc != 0){
         syslog(LOG_ERR,"ERRROR fps calc thread: proc mutex lock function failed: %s",strerror(rc));
-        // cleanup(false,0,0,local_w_file_fd);
-        // raise(SIGINT);
         exit(SYSTEM_ERROR);
     }
-
-    // unlock timer
-    // rc = pthread_mutex_unlock(&timerParams->timer_mutex);
-    // if(rc != 0){
-    //     syslog(LOG_ERR,"ERRROR fps calc thread: mutex lock function failed: %s",strerror(rc));
-    //     // cleanup(false,0,0,local_w_file_fd);
-    //     // raise(SIGINT);
-    //     exit(SYSTEM_ERROR);
-    // }
 
   /////////////////////// other calculations /////////////////////
   syslog(LOG_NOTICE,"P-FPS (processing): %d frames in 1 second",temp_proc_frames);
@@ -387,10 +256,10 @@ static void canny_edge(Mat *frame,
   Canny(*frame, *canny_frame, lowThreshold, lowThreshold*ratio_canny, kernel_size);
   //Canny(*canny_frame, *canny_frame, lowThreshold_in, lowThreshold_in*ratio_canny_in, kernel_size_in);
   
-  if(disp){
-    namedWindow("canny",WINDOW_NORMAL);
-    imshow("canny", *canny_frame );
-  }
+  // if(disp){
+  //   namedWindow("canny",WINDOW_NORMAL);
+  //   imshow("canny", *canny_frame );
+  // }
   
   if (winInput == '.')// || winInput == 'T')
   {
@@ -398,22 +267,13 @@ static void canny_edge(Mat *frame,
     if(lowThreshold > max_lowThreshold){
       lowThreshold = 0;
     }
-    //hough_thresh += 10;
-    //if(hough_thresh > max_hough_thresh){
-    //  hough_thresh = 0;
-    //}
   }
   else if(winInput == ','){
     lowThreshold -= 5;
     if(lowThreshold < 0){
       lowThreshold = max_lowThreshold;
     }
-    //hough_thresh -= 10;
-    //if(hough_thresh < 0){
-    //  hough_thresh = max_hough_thresh;
-    //}
   }
-  //cout << "lowThreshold: " << lowThreshold << endl;
 
 }
 
@@ -430,8 +290,6 @@ int stop_dist(Rect rectangle, float f,Size in_size){
   float dist = (sign_width*f)/pixels; // mm * pixel / pixel
   
   return dist;
-  //syslog(LOG_NOTICE, "stop: stop sign #%d distance: %d mm", num, dist);
-  //cout << "stop sign distance: " << dist << "mm" << endl;
 
 }
 
@@ -444,12 +302,12 @@ void *stop_detect(void *threadp){
     vector<Rect> stop_signs;
     float dist;
     
-    if(threadParams->disp){
-    //   namedWindow("original",WINDOW_NORMAL);
-       namedWindow("stop_roi",WINDOW_NORMAL);
+    // if(threadParams->disp){
+    // //   namedWindow("original",WINDOW_NORMAL);
+    //    namedWindow("stop_roi",WINDOW_NORMAL);
        
-       imshow("stop_roi",threadParams->stop_frame);
-    }
+    //    imshow("stop_roi",threadParams->stop_frame);
+    // }
      
     if( threadParams->hog)
       stop_hog.detectMultiScale(threadParams->stop_frame, threadParams->stop_signs);
@@ -477,7 +335,9 @@ void *stop_detect(void *threadp){
 
 }
 
-
+/*
+*   lane location check
+*/
 void lane_check(Vec4i left_lane, Vec4i right_lane,Size in_size){
 
     int center = in_size.width/2;
@@ -507,13 +367,11 @@ void *lane_detect(void *threadp){
 
     laneParams_t *threadParams = (laneParams_t *)threadp;
     
-    if(threadParams->disp){
-    //   namedWindow("original",WINDOW_NORMAL);
-       namedWindow("lane_roi",WINDOW_NORMAL);
-       //namedWindow("canny",WINDOW_NORMAL);
+    // if(threadParams->disp){
+    //    namedWindow("lane_roi",WINDOW_NORMAL);
        
-       imshow("lane_roi",threadParams->lane_frame);
-     }
+    //    imshow("lane_roi",threadParams->lane_frame);
+    //  }
     
     Mat canny_frame;//, roi_frame;
     vector<Vec4i> lines;
@@ -530,9 +388,6 @@ void *lane_detect(void *threadp){
     
     
     int detected_num = lines.size();
-    //int thrd = 12;
-    //int left[detected_num];
-    //int right[detected_num];
     #pragma omp parallel shared(Lx,Rx,threadParams) private(l)
     {
       
@@ -585,17 +440,8 @@ void *frame_proc_thread(void *frame_thread_params){
   stopParams_t stopParams;
   laneParams_t laneParams;
 
-  // struct timespec end_frame;
   int rc= 0;
 
-  // rc = pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-  // if(!rc){
-  //   syslog(LOG_ERR, "ERROR thread ID: %ld: unable to enable cancel on thread ID: %s", frameParams->thread_ID, strerror(rc));
-  // }
-  // rc = pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
-  // if(!rc){
-  //   syslog(LOG_ERR, "ERROR thread ID: %ld: unable to set async cancel on thread ID: %s", frameParams->thread_ID, strerror(rc));
-  // }
   
   laneParams.lane_frame = frameParams->frame_gray(frameParams->lane_roi);    
   laneParams.lane_roi = frameParams->lane_roi;  
@@ -651,20 +497,16 @@ void *frame_proc_thread(void *frame_thread_params){
 
   resize(frameParams->frame,frameParams->frame,frameParams->des_size);
 
-  // clock_gettime(CLOCK_MONOTONIC, &end_frame);
 
   // call mutex lock -> lock frame time calculation for each frame
-  // rc = pthread_mutex_lock(&time_mutex);
   rc = pthread_mutex_lock(frameParams->proc_frame_mutex);
   if(rc != 0){
       syslog(LOG_ERR,"ERRROR fps calculation: mutex lock function failed: %s",strerror(rc));
       exit(SYSTEM_ERROR);
   }
 
-  // frame_time_calc(&start_60S,&start_1S,&end_frame,type_proc);
   *frameParams->proc_frame_cnt = *frameParams->proc_frame_cnt + 1;
 
-  // rc = pthread_mutex_unlock(&time_mutex);
   rc = pthread_mutex_unlock(frameParams->proc_frame_mutex);
   if(rc != 0){
       syslog(LOG_ERR,"ERRROR fps calculation: mutex unlock function failed: %s",strerror(rc));
@@ -672,9 +514,8 @@ void *frame_proc_thread(void *frame_thread_params){
   }
 
   frameParams->complete = true;
-  // global_frame = frameParams->frame.clone();
 
-  // global_check = true;
+  pthread_exit(NULL);
 
   return NULL;
 
@@ -691,24 +532,26 @@ void *frame_disp_thread(void *display_Params){
 
   VideoWriter  output_vid;
 
+  // check save to video parameter
   if(dispParams->save_to_video)
-    output_vid.open(dispParams->out_file, dispParams->fourcc_code_out, dispParams->in_fps, dispParams->des_size,true);
+    output_vid.open(dispParams->out_file, dispParams->fourcc_code_out, dispParams->in_fps, dispParams->des_size,true); // open file
 
   while((!TAILQ_EMPTY(&frame_list)) || (!*dispParams->done)){
-  // while((!*dispParams->done)){
 
-
+    // grab frame
     frameParams_t *frameParams = TAILQ_FIRST(&frame_list);
     // cout << "frame pointer: " << frameParams << endl;
 
-
+    // ensure not null
     if(frameParams != NULL){
-    
+      
+      // check if processing complete
       if(frameParams->complete){
+        // join thread
         pthread_join(frameParams->thread_ID, NULL);
 
         ///////////////////////////// display results from detection ///////////////////////////////// 
-
+        // output 
         if(dispParams->save_to_video){
           output_vid.write(frameParams->frame);
         }
@@ -716,21 +559,27 @@ void *frame_disp_thread(void *display_Params){
           imshow(final_out,frameParams->frame);
         }
 
+        // remove from list
         TAILQ_REMOVE(&frame_list, frameParams, next_frame);
 
+       #ifdef MEMORY_FIX
+        pthread_mutex_lock(&list_num_mutex);
+        frames_in_list--;
+        pthread_mutex_unlock(&list_num_mutex);
+       #endif
+
+        // unallocate
         delete frameParams;
 
-        // rc = pthread_mutex_lock(&time_mutex);
         rc = pthread_mutex_lock(dispParams->disp_frame_mutex);
         if(rc != 0){
             syslog(LOG_ERR,"ERRROR display thread: display mutex lock function failed: %s",strerror(rc));
             exit(SYSTEM_ERROR);
         }
 
+        // frame complete tracking methods
         *dispParams->disp_frame_cnt = *dispParams->disp_frame_cnt +1;
-        // frame_time_calc(&start_60S,&start_1S,&end_frame,type_disp);
 
-        // rc = pthread_mutex_unlock(&time_mutex);
         rc = pthread_mutex_unlock(dispParams->disp_frame_mutex);
         if(rc != 0){
             syslog(LOG_ERR,"ERRROR display thread: display mutex unlock function failed: %s",strerror(rc));
@@ -743,8 +592,9 @@ void *frame_disp_thread(void *display_Params){
         // syslog(LOG_NOTICE, "Display: frame #%d completed", current_frames);
       }
     }
-      
-    if(!(current_frames % 500) && dispParams->save_to_video)
+    
+    // visual indicator for user
+    if(!(current_frames % 50) && dispParams->save_to_video)
       cout << current_frames << "displayed" << endl;
 
     //////////////////////////////////////////////////////////////////////////////////////////////  
@@ -770,6 +620,7 @@ void *frame_disp_thread(void *display_Params){
       }
   }
 
+  pthread_exit(NULL);
   return NULL;
 
 }
@@ -797,7 +648,6 @@ int main( int argc, char** argv )
     struct sigevent sev;
     timer_t timerid;
     int clock_id;
-    // struct timespec start_time;
     struct itimerspec timer;
 
     memset(&timerParams,0,sizeof(timerParams_t));
@@ -806,11 +656,10 @@ int main( int argc, char** argv )
 
   //////////////////// declare opencv variables ////////////  
     VideoCapture input;
-    // VideoWriter  output_vid;
+
     displayParams_t dispParams;
     pthread_t disp_thread_ID;
-    //VideoCapture cap;
-    //int frame_tot = 0; 
+
     int proc_frame_cnt = 0;
     int disp_frame_cnt = 0;
 
@@ -821,9 +670,8 @@ int main( int argc, char** argv )
     int in_fps = 0;
     int fourcc_code_out = 0;
     Size desired_size = SIZE_240P;
-    //CascadeClassifier stop_cascade;
     Size in_size;
-    //mode = false;
+
     uint16_t total_frames = 0;
     bool done = false;
 
@@ -916,7 +764,6 @@ int main( int argc, char** argv )
     // create output file if input given
     if(!out_file.empty()){
       fourcc_code_out = VideoWriter::fourcc('m','p','4','v');
-      // output_vid.open(out_file, fourcc_code_out, in_fps, in_size,true);
       OUT_WRITE = true;
       desired_size = in_size;
 
@@ -933,10 +780,10 @@ int main( int argc, char** argv )
 
   
   //////////////////// create display windows ////////////  
-    if(disp){
-      namedWindow("original",WINDOW_NORMAL);
-      namedWindow("grayscale",WINDOW_NORMAL);
-    }
+    // if(disp){
+    //   namedWindow("original",WINDOW_NORMAL);
+    //   namedWindow("grayscale",WINDOW_NORMAL);
+    // }
     namedWindow(final_out,WINDOW_NORMAL);
 
   
@@ -953,10 +800,7 @@ int main( int argc, char** argv )
                   in_size.width/2 - stop_roi_left_offset,        // width
                   in_size.height/2 - stop_roi_bottom_offset);   // height
                   
-    
-    // DISPLAY TOGGLES
-    // bool DISP_LINES = false;
-    // bool DISP_STOP = false;
+
     
     //int TPR = 0;
     //int FPR = 0;
@@ -972,6 +816,15 @@ int main( int argc, char** argv )
     //     return SYSTEM_ERROR;
 
     // }
+   #ifdef MEMORY_FIX
+    rc = pthread_mutex_init(&list_num_mutex,NULL);
+    if(rc != 0){
+
+        syslog(LOG_ERR, "ERROR: could not succesfully initialize mutex, error number: %d", rc);
+        return SYSTEM_ERROR;
+
+    }
+   #endif
 
     rc = pthread_mutex_init(&timerParams.timer_mutex,NULL);
     if(rc != 0){
@@ -1000,10 +853,9 @@ int main( int argc, char** argv )
   ///////////////////////////////// initialize and create other threads ///////////////////////////////// 
     // initialize linked list
     TAILQ_INIT(&frame_list);
-    // struct timespec start_60S,start_1S, end_frame;
-    // dispParams.total_frames = total_frames;
+
+    // initialise display parameters
     dispParams.done = &done;
-    // dispParams.output_vid = output_vid;
     dispParams.save_to_video = OUT_WRITE;
     dispParams.in_fps = in_fps;
     dispParams.fourcc_code_out = fourcc_code_out;
@@ -1017,6 +869,7 @@ int main( int argc, char** argv )
                     (void *)(&dispParams) // parameters to pass in
                     );
 
+    // finish intializing timer parameters 
     timerParams.disp_frame_cnt = &disp_frame_cnt;
     timerParams.proc_frame_cnt = &proc_frame_cnt;
 
@@ -1028,12 +881,6 @@ int main( int argc, char** argv )
 
     Mat frame, frame_gray;
 
-    // start time for 1 minute comparison
-    clock_gettime(CLOCK_MONOTONIC, &start_60S);
-    
-    // start time for frame
-    clock_gettime(CLOCK_MONOTONIC, &start_1S);
-
     clock_gettime(clock_id, &timer.it_value);
     
     timer.it_value.tv_sec++;
@@ -1044,35 +891,34 @@ int main( int argc, char** argv )
     }
 
     while(!done){
-    //for(int i=0; i<NUM_FEAT; i++)
-    //{
     
+     #ifdef MEMORY_FIX
+      pthread_mutex_lock(&list_num_mutex);
+
+      if(frames_in_list > THREAD_LIMIT){
+        pthread_mutex_unlock(&list_num_mutex);
+        continue;
+      }
+      
+      pthread_mutex_unlock(&list_num_mutex);
+     #endif
     
         // read in frame
       if(!input.read(frame)){
         cout << "all frames have finished processing, displaying remaining frames" << endl;
-        //while(1){
-        //  if((winInput = waitKey(0)) == ESCAPE_KEY){ 
-        //    break;
-        //  }
-        //}
-        // waitKey(0);
         done = true;
-        // while(!done){}
-
         break;
       } 
       
-      if(disp)
-        imshow("original", frame);
+      // if(disp)
+      //   imshow("original", frame);
       
       // grayscale and blur
       cvtColor( frame, frame_gray, COLOR_BGR2GRAY );
       GaussianBlur(frame_gray, frame_gray, Size(9,9), 2, 2);
 
-      if(disp)
-        imshow("grayscale", frame_gray );
-      
+      // if(disp)
+      //   imshow("grayscale", frame_gray );
       
       //////////////////////////// initialize frame processing thread parameters per frame /////////////////////////////////    
       frameParams_t *frameParams = new frameParams_t;
@@ -1100,20 +946,14 @@ int main( int argc, char** argv )
 
       /////////////////////////// thread stuff for stop detection /////////////////////////////////  
       
-      // threadParams.stop_frame = frame_gray(stop_roi);
-      
-      frameParams->stop_roi = stop_roi;
-      
-      //threadParams[STOP_DETECT].in_size = in_size;
-      
+      frameParams->stop_roi = stop_roi;      
       frameParams->focal = focal;
       
       frameParams->disp = disp;
       frameParams->hog = hog;
       frameParams->complete = false;
       
-      // cout << "thread params set" << endl;
-
+      // create thread
       pthread_create(&frameParams->thread_ID,   // pointer to thread descriptor
                     NULL,     // use default attributes
                     frame_proc_thread, // thread function entry point
@@ -1122,34 +962,38 @@ int main( int argc, char** argv )
 
       // cout << "created frame thread with ID: " << frameParams->thread_ID << endl;
 
+      // insert thread to list
       TAILQ_INSERT_TAIL(&frame_list, frameParams,next_frame);
 
-      
+
+     #ifdef MEMORY_FIX
+      pthread_mutex_lock(&list_num_mutex);
+      frames_in_list++;
+      pthread_mutex_unlock(&list_num_mutex);
+     #endif
     }
     
+    // wait for display thread
     pthread_join(disp_thread_ID, NULL);
+
+    //begin clean up
     cout << "cleaning up...." << endl;
 
+    // delete timer
     if(timer_delete(timerid) != 0) {
       cout << "ERROR: could not delete timer: " << strerror(errno) << endl;
     }    
-    cout << "joined disp_thread" << endl;
 
+    // check if list empty
     if(!TAILQ_EMPTY(&frame_list))
       cout << "finishing remaining frame processing threads..." << endl;
 
+    // stop, remove, and cleanup remaining processing threads
     while(!TAILQ_EMPTY(&frame_list)){
       frameParams_t *frameParams = TAILQ_FIRST(&frame_list);
 
       if(frameParams != NULL){
-        // cout << "attempting to cancel thread ID: " << frameParams->thread_ID << endl;
-        // rc = pthread_cancel(frameParams->thread_ID);
-        // if(!rc){
-        //   cout << "failed to cancel thread id" <<  frameParams->thread_ID << endl;
-        // }
         pthread_join(frameParams->thread_ID, NULL);
-
-        // cout << "thread ID: " << frameParams->thread_ID << " cancelled" << endl;
 
         TAILQ_REMOVE(&frame_list, frameParams, next_frame);
 
